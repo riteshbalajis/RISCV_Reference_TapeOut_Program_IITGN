@@ -48,6 +48,12 @@ Finally, the results are analyzed and debugged.
 
 ## GLS:
 
+### Black Boxing :
+Black boxing in synthesis is used when certain modules are not ready or intentionally hidden from the design flow.Instead of synthesizing their internal logic, these modules are treated as placeholders with only their input and output interfaces defined.
+
+This allows the rest of the design to be synthesized and verified without being blocked by missing or proprietary blocks.Later, the actual implementations can be integrated without changing the top-level design.
+
+In this synthesis we are going to black box some modules like RAM128,RAM256, digital_por.
 
 ### Synthesis using dc topo :
 
