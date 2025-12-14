@@ -1,31 +1,28 @@
 
-# RTL vs GLS Simulation using Synopsys(dc_shell -topo)
+# RTL vs GLS Simulation using Synopsys (dc_shell -topo)
 
-
-## RTL Simulation :
+## RTL Simulation
 
 ### Simulation using VCS
 
 ![](img/vcs_workflow.png)
 
-First, the Verilog files are compiled using VCS to create a simulation executable (simv).
-Next, simv is run to simulate the design and generate waveform (VPD) files.
-Finally, the results are analyzed and debugged.
+First, the Verilog source files are compiled using VCS to generate the simulation executable (`simv`).  
+The generated executable is then run to simulate the design and produce waveform (VPD) files.  
+Finally, the simulation results are analyzed and debugged using the generated reports and waveforms.
 
+```
+csh
+source tool_directory
 
+# VCS command to run RTL simulation
+vcs -full64 -sverilog -timescale=1ns/1ps -debug_access+all \
++incdir+../ +incdir+../../rtl +incdir+../../rtl/scl180_wrapper \
++incdir+/home/Synopsys/pdk/SCL_PDK_3/SCLPDK_V3.0_KIT/scl180/iopad/cio250/6M1L/verilog/tsl18cio250/zero \
++define+FUNCTIONAL +define+SIM \
+hkspi_tb.v -o simv
 
-    csh
-    source tool_directory 
-
-    //vcs command to run rtl synthesis 
-
-    
-    vcs -full64 -sverilog -timescale=1ns/1ps -debug_access+all \
-    +incdir+../ +incdir+../../rtl +incdir+../../rtl/scl180_wrapper \
-    +incdir+/home/Synopsys/pdk/SCL_PDK_3/SCLPDK_V3.0_KIT/scl180/iopad/cio250/6M1L/verilog/tsl18cio250/zero \
-    +define+FUNCTIONAL +define+SIM \
-    hkspi_tb.v -o simv
-        
+ ```       
 
 
 ![](img/rtl_C.png)
@@ -185,11 +182,16 @@ This commands reads only the output synthesis file ,testbench and scl directorie
 
 ### Errors and Debugging
 
-There will be some file is **no included -ERROR*  because some of the modules is just instantiated in netlist so we need to include that files. Our command doesnt read rtl files in rtl folder So, we are including all the neccessary files in caravel_netlist .
+There will be some file is **module not included -ERROR**  because some of the modules is just instantiated in netlist so we need to include that files. Our command doesnt read rtl files in rtl folder So, we are including all the neccessary files in caravel_netlist .
 
 ![](img/c1.png)
 
-**ERROR - unmatches width of variable named wbs_adr_i** the error occurs because the same variable is declared as input and also tri but in tri only [1:0] 1 bit size is redeclared but the actual size in input is [31:0] so correct it and run the simulation.Also there will more error in include files include it properly and not include the duplicate modules.
+**ERROR - unmatches width of variable named wbs_adr_i**This error occurs because the same signal is declared both as an input and as a tri with mismatched widths.
+The tri declaration incorrectly redeclares the signal as [1:0], while the original input width is [31:0].
+
+The issue was resolved by correcting the signal width to match the original declaration.
+
+Additional errors were caused by improper include paths and duplicate module definitions, which were fixed by correcting the include files and removing duplicate modules.
 
 
 
@@ -202,7 +204,7 @@ There will be some file is **no included -ERROR*  because some of the modules is
     
 ![](img/gls_report.png)
 
-- the gls test failed because of the blackboxed modules as it functionality is completely removed from the block so signals of 0xXX values .
+The GLS test initially failed due to the presence of black-boxed modules. Since the internal functionality of these modules is removed during synthesis, unknown (X) values propagate through the design during simulation.
 
 ### Waveform:
 
@@ -210,7 +212,10 @@ There will be some file is **no included -ERROR*  because some of the modules is
 
 ## GLS (included functionality of Black Boxed Module):
 
-In vsdcaravel_synthesis.v command out the blackboxed module to just check whether the other netlist functionality works correctly. Include the directory of the these three file RAM128.v,RAM256.v , digital_por.v in caravel_netlist.v(which contains include files) which is in gl.
+To verify the remaining netlist functionality, the black-boxing of selected modules was temporarily disabled in vsdcaravel_synthesis.v.
+This was done only to validate that the rest of the synthesized netlist functions correctly.
+
+The RTL files for RAM128.v, RAM256.v, and digital_por.v were included through caravel_netlist.v, which contains the required include statements and is located in the gl directory.
 
 ![](img/vsdcaravel1.png)
 ![](img/gcheck2.png)
