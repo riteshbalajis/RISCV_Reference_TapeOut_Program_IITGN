@@ -6,6 +6,14 @@
 
 ### Simulation using VCS
 
+![](img/vcs_workflow.png)
+
+First, the Verilog files are compiled using VCS to create a simulation executable (simv).
+Next, simv is run to simulate the design and generate waveform (VPD) files.
+Finally, the results are analyzed and debugged.
+
+
+
     csh
     source tool_directory 
 
@@ -18,7 +26,7 @@
     +define+FUNCTIONAL +define+SIM \
     hkspi_tb.v -o simv
         
-![](img/vcs_workflow.png)
+
 
 ![](img/rtl_C.png)
 
@@ -167,10 +175,57 @@ After running the synthesised file will be saved in synthesis/output/vsdcaravel_
     +incdir+/home/Synopsys/pdk/SCL_PDK_3/SCLPDK_V3.0_KIT/scl180/stdcell/fs120/4M1IL/verilog/vcs_sim_model \
     -o simv
 
-    
+This commands reads only the output synthesis file ,testbench and scl directories. Because all the modules are generated as netlist in that vsdcaravel_synthesis.v intslef if we try to read rtl files it will through the **double declaration of module error** in simulation.
 
-![](img/gls_report.png)
+### Errors and Debugging
+
+There will be some file is **no included -ERROR*  because some of the modules is just instantiated in netlist so we need to include that files. Our command doesnt read rtl files in rtl folder So, we are including all the neccessary files in caravel_netlist .
+
+![](img/c1.png)
+
+**ERROR - unmatches width of variable named wbs_adr_i** the error occurs because the same variable is declared as input and also tri but in tri only [1:0] 1 bit size is redeclared but the actual size in input is [31:0] so correct it and run the simulation.Also there will more error in include files include it properly and not include the duplicate modules.
+
+
 
 
 ![](img/syn_gls_result.png)
+
+### Report:
+
+    ./simv
+    
+![](img/gls_report.png)
+
+- the gls test failed because of the blackboxed modules as it functionality is completely removed from the block so signals of 0xXX values .
+
+### Waveform:
+
+![](img/wave_gls_r.png)
+
+## GLS (included functionality of Black Boxed Module):
+
+In vsdcaravel_synthesis.v command out the blackboxed module to just check whether the other netlist functionality works correctly. Include the directory of the these three file RAM128.v,RAM256.v , digital_por.v in caravel_netlist.v(which contains include files) which is in gl.
+
+![](img/vsdcaravel1.png)
+![](img/gcheck2.png)
+
+### Simulation :
+
+     vcs -full64 -sverilog -timescale=1ns/1ps \
+    -debug_access+all \
+    +define+FUNCTIONAL+SIM+GL \
+    +notimingchecks \
+    hkspi_tb.v \
+    +incdir+../synthesis/output \
+    +incdir+/home/Synopsys/pdk/SCL_PDK_3/SCLPDK_V3.0_KIT/scl180/iopad/cio250/4M1L/verilog/tsl18cio250/zero \
+    +incdir+/home/Synopsys/pdk/SCL_PDK_3/SCLPDK_V3.0_KIT/scl180/stdcell/fs120/4M1IL/verilog/vcs_sim_model \
+    -o simv
+
+![](img/stim_ultra.png)
+
+### Waveform (gtkwave):
+
+![](Img/gtkwave_ultra2.png)
+
+
 
