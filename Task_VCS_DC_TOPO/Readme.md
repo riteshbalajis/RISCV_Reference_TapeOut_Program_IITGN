@@ -22,6 +22,8 @@
 
 ![](img/rtl_C.png)
 
+![](img/rtl_c2.png)
+
 ### Running Test
 
     ./simv //name of op 
@@ -170,5 +172,5 @@ After running the synthesised file will be saved in synthesis/output/vsdcaravel_
 ![](img/gls_report.png)
 
 
-
+![](img/syn_gls_result.png)
 
