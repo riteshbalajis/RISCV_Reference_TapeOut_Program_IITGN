@@ -1,5 +1,5 @@
 
-# RTL vs GLS Simulation using Synopsys
+# RTL vs GLS Simulation using Synopsys(dc_shell -topo)
 
 
 ## RTL Simulation :
