@@ -1,0 +1,25 @@
+open_project_wrapper :
+
+    input	 porb_h,	// power-on reset, sense inverted, 3.3V domain
+    input	 porb_l,	// power-on reset, sense inverted, 1.8V domain
+    input	 por_l,		// power-on reset, noninverted, 1.8V domain
+
+vsdcaravel.v :
+
+wire porb_h;
+  wire porb_l;
+  wire por_l;
+
+
+	chip_io
+	  .porb_h(porb_h), 
+	      .por(por_l),
+
+
+	caravel_core 
+
+      .porb_h(porb_h),
+      .por_l(por_l),
+      .rstb_h(rstb_h),
+
+

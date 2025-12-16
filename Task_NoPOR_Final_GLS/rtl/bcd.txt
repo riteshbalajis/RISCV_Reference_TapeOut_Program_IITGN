@@ -1,0 +1,4408 @@
+module buff_flash_clkrst (
+	`ifdef USE_POWER_PINS
+		inout VPWR,
+		inout VGND,
+	`endif
+	input[11:0] in_n, 
+	input[2:0] in_s, 
+	output[11:0] out_s, 
+	output[2:0] out_n);
+
+	sky130_fd_sc_hd__clkbuf_8 BUF[14:0] (
+		`ifdef USE_POWER_PINS
+			.VGND(VGND),
+			.VNB(VGND),
+			.VPB(VPWR),
+			.VPWR(VPWR),
+		`endif
+		.A({in_n, in_s}), 
+		.X({out_s, out_n})); 
+
+endmodule// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+`default_nettype wire
+// This routine synchronizes the 
+
+module caravel_clocking(
+/*`ifdef USE_POWER_PINS
+    input VPWR,
+    input VGND,
+`endif */
+    input porb,		// Master (negative sense) reset from power-on-reset
+    input resetb, 	// Master (negative sense) reset
+    input ext_clk_sel,	// 0=use PLL clock, 1=use external (pad) clock
+    input ext_clk,	// External pad (slow) clock
+    input pll_clk,	// Internal PLL (fast) clock
+    input pll_clk90,	// Internal PLL (fast) clock, 90 degree phase
+    input [2:0] sel,	// Select clock divider value (0=thru, 1=divide-by-2, etc.)
+    input [2:0] sel2,	// Select clock divider value for 90 degree phase divided clock
+    input ext_reset,	// Positive sense reset from housekeeping SPI.
+    output core_clk,	// Output core clock
+    output user_clk,	// Output user (secondary) clock
+    output resetb_sync	// Output propagated and buffered reset
+);
+
+    wire pll_clk_sel;
+    wire pll_clk_divided;
+    wire pll_clk90_divided;
+    wire core_ext_clk;
+    reg  use_pll_first;
+    reg  use_pll_second;
+    reg	 ext_clk_syncd_pre;
+    reg	 ext_clk_syncd;
+
+    wire resetb_async;
+
+    assign pll_clk_sel = ~ext_clk_sel;
+
+    assign resetb_async = porb & resetb & (!ext_reset);
+    // Note that this implementation does not guard against switching to
+    // the PLL clock if the PLL clock is not present.
+
+    always @(posedge pll_clk or negedge resetb_async) begin
+	if (resetb_async == 1'b0) begin
+	    use_pll_first <= 1'b0;
+	    use_pll_second <= 1'b0;
+	    ext_clk_syncd <= 1'b0;
+	end else begin
+	    use_pll_first <= pll_clk_sel;
+	    use_pll_second <= use_pll_first;
+	    ext_clk_syncd_pre <= ext_clk;	// Sync ext_clk to pll_clk
+	    ext_clk_syncd <= ext_clk_syncd_pre;	// Do this twice (resolve metastability)
+	end
+    end
+
+    // Apply PLL clock divider
+
+    clock_div #(
+	.SIZE(3)
+    ) divider (
+	.in(pll_clk),
+	.out(pll_clk_divided),
+	.N(sel),
+	.resetb(resetb_async)
+    ); 
+
+    // Secondary PLL clock divider for user space access
+
+    clock_div #(
+	.SIZE(3)
+    ) divider2 (
+	.in(pll_clk90),
+	.out(pll_clk90_divided),
+	.N(sel2),
+	.resetb(resetb_async)
+    ); 
+
+
+    // Multiplex the clock output
+
+    assign core_ext_clk = (use_pll_first) ? ext_clk_syncd : ext_clk;
+    assign core_clk = (use_pll_second) ? pll_clk_divided : core_ext_clk;
+    assign user_clk = (use_pll_second) ? pll_clk90_divided : core_ext_clk;
+
+    // Reset assignment.  "reset" comes from POR, while "ext_reset"
+    // comes from standalone SPI (and is normally zero unless
+    // activated from the SPI).
+
+    // Staged-delay reset
+    reg [2:0] reset_delay;
+
+    always @(negedge core_clk or negedge resetb_async) begin
+        if (resetb_async == 1'b0) begin
+        reset_delay <= 3'b111;
+        end else begin
+        reset_delay <= {1'b0, reset_delay[2:1]};
+        end
+    end
+
+    assign resetb_sync = ~reset_delay[0];
+
+endmodule
+`default_nettype wire
+
+ `default_nettype wire
+ 
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+/*---------------------------------------------------------------------*/
+/* Vsdcaravel, RISC-V SoC Implementation using Synopsys and SCL180 PDK,*/
+/* a project for the VSD/Semiconductor Laboratory SCL180	           */
+/* fabrication process 			                                       */
+/*                                                          	       */
+/* Copyright 2025 efabless, Inc. /VSD                           	   */
+/* Originally written by Tim Edwards, December 2019                    */
+/* and Mohamed Shalan, August 2020			    	                   */
+/* Edited by Dhanvanti Bhavsar and Kunal Ghosh on (11/02/2025)		   */
+/* Updated on 11/02/2025:  Revised using SCL180 PDK	                   */
+/* This file is open source hardware released under the     	       */
+/* Apache 2.0 license.  See file LICENSE.                   	       */
+/* from housekeeping.v (refactoring a number of functions from	       */
+/* the management SoC).						                           */
+/*                                                          	       */
+/*---------------------------------------------------------------------*/
+
+`include "mprj_io_buffer.v"
+`include "manual_power_connections.v"
+`include "empty_macro.v"
+
+module caravel_core (
+    // All top-level I/O are package-facing pins
+`ifdef USE_POWER_PINS
+    inout vddio,  // Common 3.3V padframe/ESD power
+    inout vssio,  // Common padframe/ESD ground
+    inout vdda,   // Management 3.3V power
+    inout vssa,   // Common analog ground
+    inout vccd,   // Management/Common 1.8V power
+    inout vssd,   // Common digital ground
+    inout vdda1,  // User area 1 3.3V power
+    inout vdda2,  // User area 2 3.3V power
+    inout vssa1,  // User area 1 analog ground
+    inout vssa2,  // User area 2 analog ground
+    inout vccd1,  // User area 1 1.8V power
+    inout vccd2,  // User area 2 1.8V power
+    inout vssd1,  // User area 1 digital ground
+    inout vssd2,  // User area 2 digital ground	
+`endif
+
+    // SoC Core Interface
+    output porb_h,
+    output por_l,
+    inout  rstb_h,
+    input  clock_core,
+    output gpio_out_core,
+    input  gpio_in_core,
+    output gpio_mode0_core,
+    output gpio_mode1_core,
+    output gpio_outenb_core,
+    output gpio_inenb_core,
+
+    // Flash SPI communication
+    output flash_csb_frame,
+    output flash_clk_frame,
+    output flash_csb_oeb,
+    output flash_clk_oeb,
+    output flash_io0_oeb,
+    output flash_io1_oeb,
+    output flash_io0_ieb,
+    output flash_io1_ieb,
+    output flash_io0_do,
+    output flash_io1_do,
+    input  flash_io0_di,
+    input  flash_io1_di,
+
+    // User project IOs
+    input  [  `MPRJ_IO_PADS-1:0] mprj_io_in,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_out,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_oeb,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_inp_dis,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_ib_mode_sel,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_vtrip_sel,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_slow_sel,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_holdover,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_analog_en,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_analog_sel,
+    output [  `MPRJ_IO_PADS-1:0] mprj_io_analog_pol,
+    output [`MPRJ_IO_PADS*3-1:0] mprj_io_dm,
+
+    // Loopbacks to constant value 1 in the 1.8V domain
+    output [`MPRJ_IO_PADS-1:0] mprj_io_one,
+
+    // User project direct access to gpio pad connections for analog
+    // (all but the lowest-numbered 7 pads)
+    inout [`MPRJ_IO_PADS-10:0] mprj_analog_io
+);
+
+    //------------------------------------------------------------
+    // This value is uniquely defined for each user project.
+    //------------------------------------------------------------
+    parameter USER_PROJECT_ID = 32'h00000000;
+
+    /*
+     *--------------------------------------------------------------------
+     *
+     * These pins are overlaid on mprj_io space.  They have the function
+     * below when the management processor is in reset, or in the default
+     * configuration.  They are assigned to uses in the user space by the
+     * configuration program running off of the SPI flash.  Note that even
+     * when the user has taken control of these pins, they can be restored
+     * to the original use by setting the resetb pin low.  The SPI pins and
+     * UART pins can be connected directly to an FTDI chip as long as the
+     * FTDI chip sets these lines to high impedence (input function) at
+     * all times except when holding the chip in reset.
+     *
+     * JTAG       = mprj_io[0]		(inout)
+     * SDO 	  = mprj_io[1]		(output)
+     * SDI 	  = mprj_io[2]		(input)
+     * CSB 	  = mprj_io[3]		(input)
+     * SCK	  = mprj_io[4]		(input)
+     * ser_rx     = mprj_io[5]		(input)
+     * ser_tx     = mprj_io[6]		(output)
+     * irq 	  = mprj_io[7]		(input)
+     *
+     * spi_sck    = mprj_io[32]		(output)
+     * spi_csb    = mprj_io[33]		(output)
+     * spi_sdi    = mprj_io[34]		(input)
+     * spi_sdo    = mprj_io[35]		(output)
+     * flash_io2  = mprj_io[36]		(inout) 
+     * flash_io3  = mprj_io[37]		(inout) 
+     *
+     * These pins are reserved for any project that wants to incorporate
+     * its own processor and flash controller.  While a user project can
+     * technically use any available I/O pins for the purpose, these
+     * four pins connect to a pass-through mode from the SPI slave (pins
+     * 1-4 above) so that any SPI flash connected to these specific pins
+     * can be accessed through the SPI slave even when the processor is in
+     * reset.
+     *
+     * user_flash_csb = mprj_io[8]
+     * user_flash_sck = mprj_io[9]
+     * user_flash_io0 = mprj_io[10]
+     * user_flash_io1 = mprj_io[11]
+     *
+     *--------------------------------------------------------------------
+     */
+
+
+    // User Project Control (user-facing)
+    wire [`MPRJ_IO_PADS-1:0] user_io_oeb;
+    wire [`MPRJ_IO_PADS-1:0] user_io_in;
+    wire [`MPRJ_IO_PADS-1:0] user_io_out;
+
+    /* Padframe control signals */
+    wire [`MPRJ_IO_PADS_1-1:0] gpio_serial_link_1;
+    wire [`MPRJ_IO_PADS_2-1:0] gpio_serial_link_2;
+    wire mprj_io_loader_resetn;
+    wire mprj_io_loader_clock;
+    wire mprj_io_loader_strobe;
+    wire mprj_io_loader_data_1;		/* user1 side serial loader */
+    wire mprj_io_loader_data_2;		/* user2 side serial loader */
+
+    // User Project Control management I/O
+    // There are two types of GPIO connections:
+    // (1) Full Bidirectional: Management connects to in, out, and oeb
+    //     Uses:  JTAG and SDO
+    // (2) Selectable bidirectional:  Management connects to in and out,
+    //	   which are tied together.  oeb is grounded (oeb from the
+    //	   configuration is used)
+
+    // SDI 	 = mprj_io[2]		(input)
+    // CSB 	 = mprj_io[3]		(input)
+    // SCK	 = mprj_io[4]		(input)
+    // ser_rx    = mprj_io[5]		(input)
+    // ser_tx    = mprj_io[6]		(output)
+    // irq 	 = mprj_io[7]		(input)
+
+    wire [`MPRJ_IO_PADS-1:0] mgmt_io_in;	/* two- and three-pin data in	*/
+    wire [`MPRJ_IO_PADS-1:0] mgmt_io_out;	/* two- and three-pin data out	*/
+    wire [`MPRJ_IO_PADS-1:0] mgmt_io_oeb;	/* output enable, used only by	*/
+						/* the three-pin interfaces	*/
+    wire [`MPRJ_PWR_PADS-1:0] pwr_ctrl_nc;	/* no-connects */
+
+    // Power-on-reset signal.  The reset pad generates the sense-inverted
+    // reset at 3.3V.  The 1.8V signal and the inverted 1.8V signal are
+    // derived.
+    wire rstb_l;
+
+    // Flash SPI communication (management SoC to housekeeping)
+    wire flash_clk_core,     flash_csb_core;
+    wire flash_io0_oeb_core, flash_io1_oeb_core;
+    wire flash_io2_oeb_core, flash_io3_oeb_core;
+    wire flash_io0_ieb_core, flash_io1_ieb_core;
+    wire flash_io2_ieb_core, flash_io3_ieb_core;
+    wire flash_io0_do_core,  flash_io1_do_core;
+    wire flash_io2_do_core,  flash_io3_do_core;
+    wire flash_io0_di_core,  flash_io1_di_core;
+    wire flash_io2_di_core,  flash_io3_di_core;
+
+
+    // SoC core
+    wire caravel_clk;
+    wire caravel_clk2;
+    wire caravel_rstn;
+
+    // Logic analyzer signals
+    wire [127:0] la_data_in_user;  // From CPU to MPRJ
+    wire [127:0] la_data_in_mprj;  // From MPRJ to CPU
+    wire [127:0] la_data_out_mprj; // From CPU to MPRJ
+    wire [127:0] la_data_out_user; // From MPRJ to CPU
+    wire [127:0] la_oenb_user;     // From CPU to MPRJ
+    wire [127:0] la_oenb_mprj;     // From CPU to MPRJ
+    wire [127:0] la_iena_mprj;     // From CPU only
+
+    wire [2:0]   user_irq;	  // From MRPJ to CPU
+    wire [2:0]   user_irq_core;
+    wire [2:0]   user_irq_ena;
+    wire [2:0]	 irq_spi;	  // From SPI and external pins
+
+    // Exported Wishbone Bus (processor facing)
+    wire mprj_iena_wb;
+    wire mprj_cyc_o_core;
+    wire mprj_stb_o_core;
+    wire mprj_we_o_core;
+    wire [3:0] mprj_sel_o_core;
+    wire [31:0] mprj_adr_o_core;
+    wire [31:0] mprj_dat_o_core;
+    wire mprj_ack_i_core;
+    wire [31:0] mprj_dat_i_core;
+
+    wire [31:0] hk_dat_i;
+    wire hk_ack_i;
+    wire hk_stb_o;
+    wire hk_cyc_o;
+
+    // Exported Wishbone Bus (user area facing)
+    wire 	mprj_cyc_o_user;
+    wire 	mprj_stb_o_user;
+    wire 	mprj_we_o_user;
+    wire [3:0]  mprj_sel_o_user;
+    wire [31:0] mprj_adr_o_user;
+    wire [31:0] mprj_dat_o_user;
+    wire [31:0] mprj_dat_i_user;
+    wire	mprj_ack_i_user;
+
+    // Mask revision
+    wire [31:0] mask_rev;
+
+    wire 	mprj_clock;
+    wire 	mprj_clock2;
+    wire 	mprj_reset;
+
+    // Power monitoring 
+    wire	mprj_vcc_pwrgood;
+    wire	mprj2_vcc_pwrgood;
+    wire	mprj_vdd_pwrgood;
+    wire	mprj2_vdd_pwrgood;
+
+`ifdef USE_SRAM_RO_INTERFACE
+    // SRAM read-only access from housekeeping
+    wire 	hkspi_sram_clk;
+    wire 	hkspi_sram_csb;
+    wire [7:0]	hkspi_sram_addr;
+    wire [31:0]	hkspi_sram_data;
+`endif
+
+    // Management processor (wrapper).  Any management core
+    // implementation must match this pinout.
+
+    mgmt_core_wrapper soc (
+/*	`ifdef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+	`endif
+*/
+	// Clock and reset
+	.core_clk(caravel_clk),
+	.core_rstn(caravel_rstn),
+
+	// GPIO (1 pin)
+	.gpio_out_pad(gpio_out_core),
+	.gpio_in_pad(gpio_in_core),
+	.gpio_mode0_pad(gpio_mode0_core),
+	.gpio_mode1_pad(gpio_mode1_core),
+	.gpio_outenb_pad(gpio_outenb_core),
+	.gpio_inenb_pad(gpio_inenb_core),
+
+	// Primary SPI flash controller
+	.flash_csb(flash_csb_core),
+	.flash_clk(flash_clk_core),
+	.flash_io0_oeb(flash_io0_oeb_core),
+	.flash_io0_di(flash_io0_di_core),
+	.flash_io0_do(flash_io0_do_core),
+	.flash_io1_oeb(flash_io1_oeb_core),
+	.flash_io1_di(flash_io1_di_core),
+	.flash_io1_do(flash_io1_do_core),
+	.flash_io2_oeb(flash_io2_oeb_core),
+	.flash_io2_di(flash_io2_di_core),
+	.flash_io2_do(flash_io2_do_core),
+	.flash_io3_oeb(flash_io3_oeb_core),
+	.flash_io3_di(flash_io3_di_core),
+	.flash_io3_do(flash_io3_do_core),
+
+	// Exported Wishbone Bus
+	.mprj_wb_iena(mprj_iena_wb),
+	.mprj_cyc_o(mprj_cyc_o_core),
+	.mprj_stb_o(mprj_stb_o_core),
+	.mprj_we_o(mprj_we_o_core),
+	.mprj_sel_o(mprj_sel_o_core),
+	.mprj_adr_o(mprj_adr_o_core),
+	.mprj_dat_o(mprj_dat_o_core),
+	.mprj_ack_i(mprj_ack_i_core),
+	.mprj_dat_i(mprj_dat_i_core),
+
+	.hk_stb_o(hk_stb_o),
+	.hk_cyc_o(hk_cyc_o),
+	.hk_dat_i(hk_dat_i),
+	.hk_ack_i(hk_ack_i),
+
+	// IRQ
+	.irq({irq_spi, user_irq}),
+	.user_irq_ena(user_irq_ena),
+
+	// Module status (these may or may not be implemented)
+	.qspi_enabled(qspi_enabled),
+	.uart_enabled(uart_enabled),
+	.spi_enabled(spi_enabled),
+	.debug_mode(debug_mode),
+
+	// Module I/O (these may or may not be implemented)
+	// UART
+	.ser_tx(ser_tx),
+	.ser_rx(ser_rx),
+	// SPI master
+	.spi_sdi(spi_sdi),
+	.spi_csb(spi_csb),
+	.spi_sck(spi_sck),
+	.spi_sdo(spi_sdo),
+	.spi_sdoenb(spi_sdoenb),
+	// Debug
+	.debug_in(debug_in),
+	.debug_out(debug_out),
+	.debug_oeb(debug_oeb),
+	// Logic analyzer
+	.la_input(la_data_in_mprj),
+	.la_output(la_data_out_mprj),
+	.la_oenb(la_oenb_mprj),
+	.la_iena(la_iena_mprj),
+
+`ifdef USE_SRAM_RO_INTERFACE
+	// SRAM Read-only access from housekeeping
+	.sram_ro_clk(hkspi_sram_clk),
+	.sram_ro_csb(hkspi_sram_csb),
+	.sram_ro_addr(hkspi_sram_addr),
+	.sram_ro_data(hkspi_sram_data),
+`endif
+
+	// Trap status
+	.trap(trap)
+    );
+
+    /* Clock and reset to user space are passed through a tristate	*/
+    /* buffer like the above, but since they are intended to be		*/
+    /* always active, connect the enable to the logic-1 output from	*/
+    /* the vccd1 domain.						*/
+
+    mgmt_protect mgmt_buffers (
+/*	`ifdef USE_POWER_PINS
+ 	    .vccd(vccd),
+	    .vssd(vssd),
+	    .vccd1(vccd1),
+	    .vssd1(vssd1),
+	    .vccd2(vccd2),
+	    .vssd2(vssd2),
+	    .vdda1(vdda1),
+	    .vssa1(vssa1),
+	    .vdda2(vdda2),
+	    .vssa2(vssa2),
+	`endif */
+	.caravel_clk(caravel_clk),
+	.caravel_clk2(caravel_clk2),
+	.caravel_rstn(caravel_rstn),
+
+	.mprj_iena_wb(mprj_iena_wb),
+	.mprj_cyc_o_core(mprj_cyc_o_core),
+	.mprj_stb_o_core(mprj_stb_o_core),
+	.mprj_we_o_core(mprj_we_o_core),
+	.mprj_sel_o_core(mprj_sel_o_core),
+	.mprj_adr_o_core(mprj_adr_o_core),
+	.mprj_dat_o_core(mprj_dat_o_core),
+	.mprj_ack_i_core(mprj_ack_i_core),
+	.mprj_dat_i_core(mprj_dat_i_core),
+
+	.user_irq_core(user_irq_core),
+	.user_irq_ena(user_irq_ena),
+	.la_data_out_core(la_data_out_user),
+	.la_data_out_mprj(la_data_out_mprj),
+	.la_data_in_core(la_data_in_user),
+	.la_data_in_mprj(la_data_in_mprj),
+	.la_oenb_mprj(la_oenb_mprj),
+	.la_oenb_core(la_oenb_user),
+	.la_iena_mprj(la_iena_mprj),
+
+	.user_clock(mprj_clock),
+	.user_clock2(mprj_clock2),
+	.user_reset(mprj_reset),
+
+	.mprj_cyc_o_user(mprj_cyc_o_user),
+	.mprj_stb_o_user(mprj_stb_o_user),
+	.mprj_we_o_user(mprj_we_o_user),
+	.mprj_sel_o_user(mprj_sel_o_user),
+	.mprj_adr_o_user(mprj_adr_o_user),
+	.mprj_dat_o_user(mprj_dat_o_user),
+	.mprj_dat_i_user(mprj_dat_i_user),
+	.mprj_ack_i_user(mprj_ack_i_user),
+	.user_irq(user_irq),
+	.user1_vcc_powergood(mprj_vcc_pwrgood),
+	.user2_vcc_powergood(mprj2_vcc_pwrgood),
+	.user1_vdd_powergood(mprj_vdd_pwrgood),
+	.user2_vdd_powergood(mprj2_vdd_pwrgood)
+    );
+
+    /*--------------------------------------------------*/
+    /* Wrapper module around the user project 		*/
+    /*--------------------------------------------------*/
+
+    user_project_wrapper mprj ( 
+    /*    `ifdef USE_POWER_PINS
+	    .vdda1(vdda1),		// User area 1 3.3V power
+	    .vdda2(vdda2),		// User area 2 3.3V power
+	    .vssa1(vssa1),		// User area 1 analog ground
+	    .vssa2(vssa2),		// User area 2 analog ground
+	    .vccd1(vccd1),		// User area 1 1.8V power
+	    .vccd2(vccd2),		// User area 2 1.8V power
+	    .vssd1(vssd1),		// User area 1 digital ground
+	    .vssd2(vssd2),		// User area 2 digital ground
+    	`endif*/
+
+    	.wb_clk_i(mprj_clock),
+    	.wb_rst_i(mprj_reset),
+
+	// Management SoC Wishbone bus (exported)
+	.wbs_cyc_i(mprj_cyc_o_user),
+	.wbs_stb_i(mprj_stb_o_user),
+	.wbs_we_i(mprj_we_o_user),
+	.wbs_sel_i(mprj_sel_o_user),
+	.wbs_adr_i(mprj_adr_o_user),
+	.wbs_dat_i(mprj_dat_o_user),
+	.wbs_ack_o(mprj_ack_i_user),
+	.wbs_dat_o(mprj_dat_i_user),
+
+	// GPIO pad 3-pin interface (plus analog)
+	.io_in (user_io_in),
+    .io_out(user_io_out),
+    .io_oeb(user_io_oeb),
+	.analog_io(mprj_analog_io),
+
+	// Logic analyzer
+	.la_data_in(la_data_in_user),
+	.la_data_out(la_data_out_user),
+	.la_oenb(la_oenb_user),
+
+	// Independent clock
+	.user_clock2(mprj_clock2),
+
+	// IRQ
+	.user_irq(user_irq_core)
+    );
+
+    /*------------------------------------------*/
+    /* End user project instantiation		*/
+    /*------------------------------------------*/
+
+    wire [`MPRJ_IO_PADS_1-1:0] gpio_serial_link_1_shifted;
+    wire [`MPRJ_IO_PADS_2-1:0] gpio_serial_link_2_shifted;
+
+  assign gpio_serial_link_1_shifted = {
+    gpio_serial_link_1[`MPRJ_IO_PADS_1-2:0], mprj_io_loader_data_1
+  };
+  // Note that serial_link_2 is backwards compared to serial_link_1, so it
+  // shifts in the other direction.
+  assign gpio_serial_link_2_shifted = {
+    mprj_io_loader_data_2, gpio_serial_link_2[`MPRJ_IO_PADS_2-1:1]
+  };
+
+    // Propagating clock and reset to mitigate timing and fanout issues
+    wire [`MPRJ_IO_PADS_1-1:0] gpio_clock_1;
+    wire [`MPRJ_IO_PADS_2-1:0] gpio_clock_2;
+    wire [`MPRJ_IO_PADS_1-1:0] gpio_resetn_1;
+    wire [`MPRJ_IO_PADS_2-1:0] gpio_resetn_2;
+    wire [`MPRJ_IO_PADS_1-1:0] gpio_load_1;
+    wire [`MPRJ_IO_PADS_2-1:0] gpio_load_2;
+    wire [`MPRJ_IO_PADS_1-1:0] gpio_clock_1_shifted;
+    wire [`MPRJ_IO_PADS_2-1:0] gpio_clock_2_shifted;
+    wire [`MPRJ_IO_PADS_1-1:0] gpio_resetn_1_shifted;
+    wire [`MPRJ_IO_PADS_2-1:0] gpio_resetn_2_shifted;
+    wire [`MPRJ_IO_PADS_1-1:0] gpio_load_1_shifted;
+    wire [`MPRJ_IO_PADS_2-1:0] gpio_load_2_shifted;
+
+  assign gpio_clock_1_shifted  = {gpio_clock_1[`MPRJ_IO_PADS_1-2:0], mprj_io_loader_clock};
+  assign gpio_clock_2_shifted  = {mprj_io_loader_clock, gpio_clock_2[`MPRJ_IO_PADS_2-1:1]};
+  assign gpio_resetn_1_shifted = {gpio_resetn_1[`MPRJ_IO_PADS_1-2:0], mprj_io_loader_resetn};
+  assign gpio_resetn_2_shifted = {mprj_io_loader_resetn, gpio_resetn_2[`MPRJ_IO_PADS_2-1:1]};
+  assign gpio_load_1_shifted   = {gpio_load_1[`MPRJ_IO_PADS_1-2:0], mprj_io_loader_strobe};
+  assign gpio_load_2_shifted   = {mprj_io_loader_strobe, gpio_load_2[`MPRJ_IO_PADS_2-1:1]};
+
+    wire [2:0] spi_pll_sel;
+    wire [2:0] spi_pll90_sel;
+    wire [4:0] spi_pll_div;
+    wire [25:0] spi_pll_trim;
+
+    // Clocking control
+
+    caravel_clocking clock_ctrl (
+    /*`ifdef USE_POWER_PINS
+		.VPWR(vccd),
+		.VGND(vssd),
+    `endif*/
+        .porb(porb_l),
+        .ext_clk_sel(ext_clk_sel),
+        .ext_clk(clock_core),
+        .pll_clk(pll_clk),
+        .pll_clk90(pll_clk90),
+        .resetb(rstb_l),
+        .sel(spi_pll_sel),
+        .sel2(spi_pll90_sel),
+        .ext_reset(ext_reset),  // From housekeeping SPI
+        .core_clk(caravel_clk),
+        .user_clk(caravel_clk2),
+        .resetb_sync(caravel_rstn)
+    );
+
+    // DCO/Digital Locked Loop
+
+    digital_pll pll (
+    /*`ifdef USE_POWER_PINS
+		.VPWR(vccd),
+		.VGND(vssd),
+    `endif*/
+        .resetb(rstb_l),
+        .enable(spi_pll_ena),
+        .osc(clock_core),
+        .clockp({pll_clk, pll_clk90}),
+        .div(spi_pll_div),
+        .dco(spi_pll_dco_ena),
+        .ext_trim(spi_pll_trim)
+    );
+
+
+  // mprj_gpio_buffer signals
+  wire [`MPRJ_IO_PADS-1:0] mgmt_io_in_hk;	/* mgmt_io_in at housekeeping	*/
+  wire [`MPRJ_IO_PADS-1:0] mgmt_io_out_hk;	/* mgmt_io_out at housekeeping	*/
+  wire [`MPRJ_IO_PADS-1:0] mgmt_io_oeb_hk;	/* mgmt_io_oeb at housekeeping	*/
+
+  wire [(`MPRJ_IO_PADS_1-1):0] mgmt_gpio_in;
+  wire [(`MPRJ_IO_PADS_1-1):0] mgmt_gpio_out;
+  wire [2:0] mgmt_gpio_oeb;
+  wire [(`MPRJ_IO_PADS_1-1):0] mgmt_gpio_in_buf;
+  wire [(`MPRJ_IO_PADS_1-1):0] mgmt_gpio_out_buf;
+  wire [2:0] mgmt_gpio_oeb_buf;
+
+    // Housekeeping interface
+
+    housekeeping housekeeping (
+    `ifndef USE_POWER_PINS
+		.VPWR(vccd),
+		.VGND(vssd),
+    `endif
+
+        .wb_clk_i(caravel_clk),
+        .wb_rstn_i(caravel_rstn),
+
+        .wb_adr_i(mprj_adr_o_core),
+        .wb_dat_i(mprj_dat_o_core),
+        .wb_sel_i(mprj_sel_o_core),
+        .wb_we_i(mprj_we_o_core),
+        .wb_cyc_i(hk_cyc_o),
+        .wb_stb_i(hk_stb_o),
+        .wb_ack_o(hk_ack_i),
+        .wb_dat_o(hk_dat_i),
+
+        .porb(porb_l),
+
+        .pll_ena(spi_pll_ena),
+        .pll_dco_ena(spi_pll_dco_ena),
+        .pll_div(spi_pll_div),
+        .pll_sel(spi_pll_sel),
+        .pll90_sel(spi_pll90_sel),
+        .pll_trim(spi_pll_trim),
+        .pll_bypass(ext_clk_sel),
+
+	.qspi_enabled(qspi_enabled),
+	.uart_enabled(uart_enabled),
+	.spi_enabled(spi_enabled),
+	.debug_mode(debug_mode),
+
+	.ser_tx(ser_tx),
+	.ser_rx(ser_rx),
+
+	.spi_sdi(spi_sdi),
+	.spi_csb(spi_csb),
+	.spi_sck(spi_sck),
+	.spi_sdo(spi_sdo),
+	.spi_sdoenb(spi_sdoenb),
+
+	.debug_in(debug_in),
+	.debug_out(debug_out),
+	.debug_oeb(debug_oeb),
+
+        .irq(irq_spi),
+        .reset(ext_reset),
+
+        .serial_clock(mprj_io_loader_clock),
+        .serial_load(mprj_io_loader_strobe),
+        .serial_resetn(mprj_io_loader_resetn),
+        .serial_data_1(mprj_io_loader_data_1),
+        .serial_data_2(mprj_io_loader_data_2),
+
+	.mgmt_gpio_in(mgmt_io_in_hk),
+	.mgmt_gpio_out(mgmt_io_out_hk),
+	.mgmt_gpio_oeb(mgmt_io_oeb_hk),
+
+	.pwr_ctrl_out(pwr_ctrl_nc),	/* Not used in this version */
+
+        .trap(trap),
+
+	.user_clock(caravel_clk2),
+
+        .mask_rev_in(mask_rev),
+
+	.spimemio_flash_csb(flash_csb_core),
+	.spimemio_flash_clk(flash_clk_core),
+	.spimemio_flash_io0_oeb(flash_io0_oeb_core),
+	.spimemio_flash_io1_oeb(flash_io1_oeb_core),
+	.spimemio_flash_io2_oeb(flash_io2_oeb_core),
+	.spimemio_flash_io3_oeb(flash_io3_oeb_core),
+	.spimemio_flash_io0_do(flash_io0_do_core),
+	.spimemio_flash_io1_do(flash_io1_do_core),
+	.spimemio_flash_io2_do(flash_io2_do_core),
+	.spimemio_flash_io3_do(flash_io3_do_core),
+	.spimemio_flash_io0_di(flash_io0_di_core),
+	.spimemio_flash_io1_di(flash_io1_di_core),
+	.spimemio_flash_io2_di(flash_io2_di_core),
+	.spimemio_flash_io3_di(flash_io3_di_core),
+
+	.pad_flash_csb(flash_csb_frame),
+	.pad_flash_csb_oeb(flash_csb_oeb),
+	.pad_flash_clk(flash_clk_frame),
+	.pad_flash_clk_oeb(flash_clk_oeb),
+	.pad_flash_io0_oeb(flash_io0_oeb),
+	.pad_flash_io1_oeb(flash_io1_oeb),
+	.pad_flash_io0_ieb(flash_io0_ieb),
+	.pad_flash_io1_ieb(flash_io1_ieb),
+	.pad_flash_io0_do(flash_io0_do),
+	.pad_flash_io1_do(flash_io1_do),
+	.pad_flash_io0_di(flash_io0_di),
+	.pad_flash_io1_di(flash_io1_di),
+
+`ifdef USE_SRAM_RO_INTERFACE
+	.sram_ro_clk(hkspi_sram_clk),
+	.sram_ro_csb(hkspi_sram_csb),
+	.sram_ro_addr(hkspi_sram_addr),
+	.sram_ro_data(hkspi_sram_data),
+`endif
+
+	.usr1_vcc_pwrgood(mprj_vcc_pwrgood),
+	.usr2_vcc_pwrgood(mprj2_vcc_pwrgood),
+	.usr1_vdd_pwrgood(mprj_vdd_pwrgood),
+	.usr2_vdd_pwrgood(mprj2_vdd_pwrgood)
+    );
+
+  mprj_io_buffer gpio_buf (
+/*`ifdef USE_POWER_PINS
+      .VPWR(vccd),
+      .VGND(vssd),
+`endif */
+
+      .mgmt_gpio_in(mgmt_gpio_in),
+      .mgmt_gpio_in_buf(mgmt_gpio_in_buf),
+      .mgmt_gpio_oeb(mgmt_gpio_oeb),
+      .mgmt_gpio_oeb_buf(mgmt_gpio_oeb_buf),
+      .mgmt_gpio_out(mgmt_gpio_out),
+      .mgmt_gpio_out_buf(mgmt_gpio_out_buf)
+  );
+
+  assign mgmt_gpio_in  = mgmt_io_in[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS_1)];
+  assign mgmt_gpio_out = mgmt_io_out_hk[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS_1)];
+  assign mgmt_gpio_oeb = mgmt_io_oeb_hk[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)];
+  
+  assign mgmt_io_in_hk = {mgmt_gpio_in_buf, mgmt_io_in[(`MPRJ_IO_PADS_1-1):0]};
+  assign mgmt_io_out   = {mgmt_gpio_out_buf, mgmt_io_out_hk[(`MPRJ_IO_PADS_1-1):0]};
+  assign mgmt_io_oeb   = {mgmt_gpio_oeb_buf, mgmt_io_oeb_hk[(`MPRJ_IO_PADS-4):0]};
+
+    /* GPIO defaults (via programmed) */
+    wire [`MPRJ_IO_PADS*13-1:0] gpio_defaults;
+
+    /* Fixed defaults for the first 5 GPIO pins */
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(13'h1803)
+    ) gpio_defaults_block_0 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[12:0])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(13'h1803)
+    ) gpio_defaults_block_1 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[25:13])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(13'h0403)
+    ) gpio_defaults_block_2 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[38:26])
+    );
+
+    // CSB pin is set as an internal pull-up
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(13'h0801)
+    ) gpio_defaults_block_3 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[51:39])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(13'h0403)
+    ) gpio_defaults_block_4 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[64:52])
+    );
+
+    /* Via-programmable defaults for the rest of the GPIO pins */
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_5_INIT)
+    ) gpio_defaults_block_5 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[77:65])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_6_INIT)
+    ) gpio_defaults_block_6 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[90:78])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_7_INIT)
+    ) gpio_defaults_block_7 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[103:91])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_8_INIT)
+    ) gpio_defaults_block_8 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[116:104])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_9_INIT)
+    ) gpio_defaults_block_9 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[129:117])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_10_INIT)
+    ) gpio_defaults_block_10 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[142:130])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_11_INIT)
+    ) gpio_defaults_block_11 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[155:143])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_12_INIT)
+    ) gpio_defaults_block_12 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[168:156])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_13_INIT)
+    ) gpio_defaults_block_13 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[181:169])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_14_INIT)
+    ) gpio_defaults_block_14 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[194:182])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_15_INIT)
+    ) gpio_defaults_block_15 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[207:195])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_16_INIT)
+    ) gpio_defaults_block_16 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[220:208])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_17_INIT)
+    ) gpio_defaults_block_17 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[233:221])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_18_INIT)
+    ) gpio_defaults_block_18 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[246:234])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_19_INIT)
+    ) gpio_defaults_block_19 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[259:247])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_20_INIT)
+    ) gpio_defaults_block_20 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[272:260])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_21_INIT)
+    ) gpio_defaults_block_21 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[285:273])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_22_INIT)
+    ) gpio_defaults_block_22 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[298:286])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_23_INIT)
+    ) gpio_defaults_block_23 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[311:299])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_24_INIT)
+    ) gpio_defaults_block_24 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[324:312])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_25_INIT)
+    ) gpio_defaults_block_25 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[337:325])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_26_INIT)
+    ) gpio_defaults_block_26 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[350:338])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_27_INIT)
+    ) gpio_defaults_block_27 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[363:351])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_28_INIT)
+    ) gpio_defaults_block_28 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[376:364])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_29_INIT)
+    ) gpio_defaults_block_29 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[389:377])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_30_INIT)
+    ) gpio_defaults_block_30 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[402:390])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_31_INIT)
+    ) gpio_defaults_block_31 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[415:403])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_32_INIT)
+    ) gpio_defaults_block_32 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[428:416])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_33_INIT)
+    ) gpio_defaults_block_33 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[441:429])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_34_INIT)
+    ) gpio_defaults_block_34 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[454:442])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_35_INIT)
+    ) gpio_defaults_block_35 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[467:455])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_36_INIT)
+    ) gpio_defaults_block_36 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[480:468])
+    );
+
+    gpio_defaults_block #(
+	.GPIO_CONFIG_INIT(`USER_CONFIG_GPIO_37_INIT)
+    ) gpio_defaults_block_37 (
+    	`ifndef USE_POWER_PINS
+	    .VPWR(vccd),
+	    .VGND(vssd),
+        `endif
+	.gpio_defaults(gpio_defaults[493:481])
+    );
+
+    // Each control block sits next to an I/O pad in the user area.
+    // It gets input through a serial chain from the previous control
+    // block and passes it to the next control block.  Due to the nature
+    // of the shift register, bits are presented in reverse, as the first
+    // bit in ends up as the last bit of the last I/O pad control block.
+
+    // There are two types of block;  the first two and the last two
+    // are configured to be full bidirectional under control of the
+    // management Soc (JTAG and SDO for the first two;  flash_io2 and
+    // flash_io3 for the last two).  The rest are configured to be default
+    // (input).  Note that the first two and last two are the ones closest
+    // to the management SoC on either side, which minimizes the wire length
+    // of the extra signals those pads need.
+
+    /* First two GPIOs (JTAG and SDO) */
+
+    gpio_control_block gpio_control_bidir_1 [1:0] (
+    	`ifndef USE_POWER_PINS
+	    .vccd(vccd),
+	    .vssd(vssd),
+	    .vccd1(vccd1),
+	    .vssd1(vssd1),
+        `endif
+
+	.gpio_defaults(gpio_defaults[25:0]),
+
+    	// Management Soc-facing signals
+
+    	.resetn(gpio_resetn_1_shifted[1:0]),
+    	.serial_clock(gpio_clock_1_shifted[1:0]),
+    	.serial_load(gpio_load_1_shifted[1:0]),
+
+    	.resetn_out(gpio_resetn_1[1:0]),
+    	.serial_clock_out(gpio_clock_1[1:0]),
+    	.serial_load_out(gpio_load_1[1:0]),
+
+    	.mgmt_gpio_in(mgmt_io_in[1:0]),
+	.mgmt_gpio_out(mgmt_io_out[1:0]),
+	.mgmt_gpio_oeb(mgmt_io_oeb[1:0]),
+
+        .one(mprj_io_one[1:0]),
+        .zero(),
+
+    	// Serial data chain for pad configuration
+    	.serial_data_in(gpio_serial_link_1_shifted[1:0]),
+    	.serial_data_out(gpio_serial_link_1[1:0]),
+
+    	// User-facing signals
+    	.user_gpio_out(user_io_out[1:0]),
+    	.user_gpio_oeb(user_io_oeb[1:0]),
+    	.user_gpio_in(user_io_in[1:0]),
+
+    	// Pad-facing signals (Pad GPIOv2)
+    	.pad_gpio_inenb(mprj_io_inp_dis[1:0]),
+    	.pad_gpio_ib_mode_sel(mprj_io_ib_mode_sel[1:0]),
+    	.pad_gpio_vtrip_sel(mprj_io_vtrip_sel[1:0]),
+    	.pad_gpio_slow_sel(mprj_io_slow_sel[1:0]),
+    	.pad_gpio_holdover(mprj_io_holdover[1:0]),
+    	.pad_gpio_ana_en(mprj_io_analog_en[1:0]),
+    	.pad_gpio_ana_sel(mprj_io_analog_sel[1:0]),
+    	.pad_gpio_ana_pol(mprj_io_analog_pol[1:0]),
+    	.pad_gpio_dm(mprj_io_dm[5:0]),
+    	.pad_gpio_outenb(mprj_io_oeb[1:0]),
+    	.pad_gpio_out(mprj_io_out[1:0]),
+    	.pad_gpio_in(mprj_io_in[1:0])
+    );
+
+    /* Section 1 GPIOs (GPIO 2 to 7) that start up under management control */
+
+    gpio_control_block gpio_control_in_1a [5:0] (
+        `ifndef USE_POWER_PINS
+            .vccd(vccd),
+	    .vssd(vssd),
+	    .vccd1(vccd1),
+	    .vssd1(vssd1),
+        `endif
+
+	.gpio_defaults(gpio_defaults[103:26]),
+
+    	// Management Soc-facing signals
+
+    	.resetn(gpio_resetn_1_shifted[7:2]),
+    	.serial_clock(gpio_clock_1_shifted[7:2]),
+    	.serial_load(gpio_load_1_shifted[7:2]),
+
+    	.resetn_out(gpio_resetn_1[7:2]),
+    	.serial_clock_out(gpio_clock_1[7:2]),
+    	.serial_load_out(gpio_load_1[7:2]),
+
+	.mgmt_gpio_in(mgmt_io_in[7:2]),
+	.mgmt_gpio_out(mgmt_io_out[7:2]),
+	.mgmt_gpio_oeb(mprj_io_one[7:2]),
+
+        .one(mprj_io_one[7:2]),
+        .zero(),
+
+    	// Serial data chain for pad configuration
+    	.serial_data_in(gpio_serial_link_1_shifted[7:2]),
+    	.serial_data_out(gpio_serial_link_1[7:2]),
+
+    	// User-facing signals
+    	.user_gpio_out(user_io_out[7:2]),
+    	.user_gpio_oeb(user_io_oeb[7:2]),
+    	.user_gpio_in(user_io_in[7:2]),
+
+    	// Pad-facing signals (Pad GPIOv2)
+    	.pad_gpio_inenb(mprj_io_inp_dis[7:2]),
+    	.pad_gpio_ib_mode_sel(mprj_io_ib_mode_sel[7:2]),
+    	.pad_gpio_vtrip_sel(mprj_io_vtrip_sel[7:2]),
+    	.pad_gpio_slow_sel(mprj_io_slow_sel[7:2]),
+    	.pad_gpio_holdover(mprj_io_holdover[7:2]),
+    	.pad_gpio_ana_en(mprj_io_analog_en[7:2]),
+    	.pad_gpio_ana_sel(mprj_io_analog_sel[7:2]),
+    	.pad_gpio_ana_pol(mprj_io_analog_pol[7:2]),
+    	.pad_gpio_dm(mprj_io_dm[23:6]),
+    	.pad_gpio_outenb(mprj_io_oeb[7:2]),
+    	.pad_gpio_out(mprj_io_out[7:2]),
+    	.pad_gpio_in(mprj_io_in[7:2])
+    );
+
+    /* Section 1 GPIOs (GPIO 8 to 18) */
+
+    gpio_control_block gpio_control_in_1 [`MPRJ_IO_PADS_1-9:0] (
+        `ifndef USE_POWER_PINS
+            .vccd(vccd),
+	    .vssd(vssd),
+	    .vccd1(vccd1),
+	    .vssd1(vssd1),
+        `endif
+
+	.gpio_defaults(gpio_defaults[(`MPRJ_IO_PADS_1*13-1):104]),
+
+    	// Management Soc-facing signals
+
+    	.resetn(gpio_resetn_1_shifted[(`MPRJ_IO_PADS_1-1):8]),
+    	.serial_clock(gpio_clock_1_shifted[(`MPRJ_IO_PADS_1-1):8]),
+    	.serial_load(gpio_load_1_shifted[(`MPRJ_IO_PADS_1-1):8]),
+
+    	.resetn_out(gpio_resetn_1[(`MPRJ_IO_PADS_1-1):8]),
+    	.serial_clock_out(gpio_clock_1[(`MPRJ_IO_PADS_1-1):8]),
+    	.serial_load_out(gpio_load_1[(`MPRJ_IO_PADS_1-1):8]),
+
+	.mgmt_gpio_in(mgmt_io_in[(`MPRJ_IO_PADS_1-1):8]),
+	.mgmt_gpio_out(mgmt_io_out[(`MPRJ_IO_PADS_1-1):8]),
+	.mgmt_gpio_oeb(mprj_io_one[(`MPRJ_IO_PADS_1-1):8]),
+  
+        .one(mprj_io_one[(`MPRJ_IO_PADS_1-1):8]),
+        .zero(),
+
+    	// Serial data chain for pad configuration
+    	.serial_data_in(gpio_serial_link_1_shifted[(`MPRJ_IO_PADS_1-1):8]),
+    	.serial_data_out(gpio_serial_link_1[(`MPRJ_IO_PADS_1-1):8]),
+
+    	// User-facing signals
+    	.user_gpio_out(user_io_out[(`MPRJ_IO_PADS_1-1):8]),
+    	.user_gpio_oeb(user_io_oeb[(`MPRJ_IO_PADS_1-1):8]),
+    	.user_gpio_in(user_io_in[(`MPRJ_IO_PADS_1-1):8]),
+
+    	// Pad-facing signals (Pad GPIOv2)
+    	.pad_gpio_inenb(mprj_io_inp_dis[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_ib_mode_sel(mprj_io_ib_mode_sel[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_vtrip_sel(mprj_io_vtrip_sel[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_slow_sel(mprj_io_slow_sel[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_holdover(mprj_io_holdover[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_ana_en(mprj_io_analog_en[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_ana_sel(mprj_io_analog_sel[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_ana_pol(mprj_io_analog_pol[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_dm(mprj_io_dm[(`MPRJ_IO_PADS_1*3-1):24]),
+    	.pad_gpio_outenb(mprj_io_oeb[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_out(mprj_io_out[(`MPRJ_IO_PADS_1-1):8]),
+    	.pad_gpio_in(mprj_io_in[(`MPRJ_IO_PADS_1-1):8])
+    );
+
+    /* Last three GPIOs (spi_sdo, flash_io2, and flash_io3) */
+
+    gpio_control_block gpio_control_bidir_2 [2:0] (
+    	`ifndef USE_POWER_PINS
+	    .vccd(vccd),
+	    .vssd(vssd),
+	    .vccd1(vccd1),
+	    .vssd1(vssd1),
+        `endif
+
+	.gpio_defaults(gpio_defaults[(`MPRJ_IO_PADS*13-1):(`MPRJ_IO_PADS*13-39)]),
+
+    	// Management Soc-facing signals
+
+    	.resetn(gpio_resetn_2_shifted[(`MPRJ_IO_PADS_2-1):(`MPRJ_IO_PADS_2-3)]),
+    	.serial_clock(gpio_clock_2_shifted[(`MPRJ_IO_PADS_2-1):(`MPRJ_IO_PADS_2-3)]),
+    	.serial_load(gpio_load_2_shifted[(`MPRJ_IO_PADS_2-1):(`MPRJ_IO_PADS_2-3)]),
+
+    	.resetn_out(gpio_resetn_2[(`MPRJ_IO_PADS_2-1):(`MPRJ_IO_PADS_2-3)]),
+    	.serial_clock_out(gpio_clock_2[(`MPRJ_IO_PADS_2-1):(`MPRJ_IO_PADS_2-3)]),
+    	.serial_load_out(gpio_load_2[(`MPRJ_IO_PADS_2-1):(`MPRJ_IO_PADS_2-3)]),
+
+    	.mgmt_gpio_in(mgmt_io_in[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+	.mgmt_gpio_out(mgmt_io_out[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+	.mgmt_gpio_oeb(mgmt_io_oeb[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+
+        .one(mprj_io_one[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+        .zero(),
+
+    	// Serial data chain for pad configuration
+    	.serial_data_in(gpio_serial_link_2_shifted[(`MPRJ_IO_PADS_2-1):(`MPRJ_IO_PADS_2-3)]),
+    	.serial_data_out(gpio_serial_link_2[(`MPRJ_IO_PADS_2-1):(`MPRJ_IO_PADS_2-3)]),
+
+    	// User-facing signals
+    	.user_gpio_out(user_io_out[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.user_gpio_oeb(user_io_oeb[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.user_gpio_in(user_io_in[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+
+    	// Pad-facing signals (Pad GPIOv2)
+    	.pad_gpio_inenb(mprj_io_inp_dis[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_ib_mode_sel(mprj_io_ib_mode_sel[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_vtrip_sel(mprj_io_vtrip_sel[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_slow_sel(mprj_io_slow_sel[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_holdover(mprj_io_holdover[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_ana_en(mprj_io_analog_en[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_ana_sel(mprj_io_analog_sel[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_ana_pol(mprj_io_analog_pol[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_dm(mprj_io_dm[(`MPRJ_IO_PADS*3-1):(`MPRJ_IO_PADS*3-9)]),
+    	.pad_gpio_outenb(mprj_io_oeb[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_out(mprj_io_out[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)]),
+    	.pad_gpio_in(mprj_io_in[(`MPRJ_IO_PADS-1):(`MPRJ_IO_PADS-3)])
+    );
+
+    /* Section 2 GPIOs (GPIO 19 to 34) */
+
+    gpio_control_block gpio_control_in_2 [`MPRJ_IO_PADS_2-4:0] (
+    	`ifndef USE_POWER_PINS
+            .vccd(vccd),
+	    .vssd(vssd),
+	    .vccd1(vccd1),
+	    .vssd1(vssd1),
+        `endif
+
+	.gpio_defaults(gpio_defaults[(`MPRJ_IO_PADS*13-40):(`MPRJ_IO_PADS_1*13)]),
+
+    	// Management Soc-facing signals
+
+    	.resetn(gpio_resetn_2_shifted[(`MPRJ_IO_PADS_2-4):0]),
+    	.serial_clock(gpio_clock_2_shifted[(`MPRJ_IO_PADS_2-4):0]),
+    	.serial_load(gpio_load_2_shifted[(`MPRJ_IO_PADS_2-4):0]),
+
+    	.resetn_out(gpio_resetn_2[(`MPRJ_IO_PADS_2-4):0]),
+    	.serial_clock_out(gpio_clock_2[(`MPRJ_IO_PADS_2-4):0]),
+    	.serial_load_out(gpio_load_2[(`MPRJ_IO_PADS_2-4):0]),
+
+	.mgmt_gpio_in(mgmt_io_in[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+	.mgmt_gpio_out(mgmt_io_out[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+	.mgmt_gpio_oeb(mprj_io_one[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+
+
+        .one(mprj_io_one[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+        .zero(),
+
+    	// Serial data chain for pad configuration
+    	.serial_data_in(gpio_serial_link_2_shifted[(`MPRJ_IO_PADS_2-4):0]),
+    	.serial_data_out(gpio_serial_link_2[(`MPRJ_IO_PADS_2-4):0]),
+
+    	// User-facing signals
+    	.user_gpio_out(user_io_out[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.user_gpio_oeb(user_io_oeb[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.user_gpio_in(user_io_in[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+
+    	// Pad-facing signals (Pad GPIOv2)
+    	.pad_gpio_inenb(mprj_io_inp_dis[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_ib_mode_sel(mprj_io_ib_mode_sel[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_vtrip_sel(mprj_io_vtrip_sel[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_slow_sel(mprj_io_slow_sel[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_holdover(mprj_io_holdover[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_ana_en(mprj_io_analog_en[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_ana_sel(mprj_io_analog_sel[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_ana_pol(mprj_io_analog_pol[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_dm(mprj_io_dm[(`MPRJ_IO_PADS*3-10):(`MPRJ_IO_PADS_1*3)]),
+    	.pad_gpio_outenb(mprj_io_oeb[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_out(mprj_io_out[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)]),
+    	.pad_gpio_in(mprj_io_in[(`MPRJ_IO_PADS-4):(`MPRJ_IO_PADS_1)])
+    );
+
+    user_id_programming #(
+	.USER_PROJECT_ID(USER_PROJECT_ID)
+    ) user_id_value (
+	`ifndef USE_POWER_PINS
+		.VPWR(vccd),
+		.VGND(vssd),
+	`endif
+	.mask_rev(mask_rev)
+    );
+
+    // Power-on-reset circuit
+    dummy_por por (
+	`ifdef USE_POWER_PINS
+		.vdd3v3(vddio),
+		.vdd1v8(vccd),
+		.vss3v3(vssio),
+		.vss1v8(vssd),
+	`endif
+		.porb_h(porb_h),
+		.porb_l(porb_l),
+		.por_l(por_l)
+    );
+
+    // XRES (chip input pin reset) reset level converter
+    xres_buf rstb_level (
+	`ifndef USE_POWER_PINS
+		.VPWR(vddio),
+		.LVPWR(vccd),
+		.LVGND(vssd),
+		.VGND(vssio),
+	`endif
+		.A(rstb_h),
+		.X(rstb_l)
+    );
+
+    /* Spare logic for metal mask fixes */
+    // `define NUM_SPARE_BLOCKS (`MPRJ_IO_PADS+4)
+    `define NUM_SPARE_BLOCKS 4
+
+    wire [(27*`NUM_SPARE_BLOCKS)-1:0] spare_xz_nc;
+    wire [(4*`NUM_SPARE_BLOCKS)-1:0] spare_xi_nc;
+    wire [(1*`NUM_SPARE_BLOCKS)-1:0] spare_xib_nc;
+    wire [(2*`NUM_SPARE_BLOCKS)-1:0] spare_xna_nc;
+    wire [(2*`NUM_SPARE_BLOCKS)-1:0] spare_xno_nc;
+    wire [(2*`NUM_SPARE_BLOCKS)-1:0] spare_xmx_nc;
+    wire [(2*`NUM_SPARE_BLOCKS)-1:0] spare_xfq_nc;
+    wire [(2*`NUM_SPARE_BLOCKS)-1:0] spare_xfqn_nc;
+
+    // Four spare logic blocks above the processor and one per GPIO
+    // control block.
+(* keep *) spare_logic_block spare_logic [`NUM_SPARE_BLOCKS-1:0] (
+	/*`ifdef USE_POWER_PINS
+
+		.vccd(vccd),
+		.vssd(vssd),
+	`endif */
+		.spare_xz(spare_xz_nc),
+		.spare_xi(spare_xi_nc),
+		.spare_xib(spare_xib_nc),
+		.spare_xna(spare_xna_nc),
+		.spare_xno(spare_xno_nc),
+		.spare_xmx(spare_xmx_nc),
+		.spare_xfq(spare_xfq_nc),
+		.spare_xfqn(spare_xfqn_nc)
+    );
+(* keep *) empty_macro empty_macro_0 ();
+(* keep *) empty_macro empty_macro_1 ();
+(* keep *) manual_power_connections manual_power_connections ();
+endmodule
+// `default_nettype wire
+module caravel_logo ();
+endmodule
+module caravel_motto ();
+endmodule
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+`timescale 1 ns / 1 ps
+
+`define UNIT_DELAY #1
+`define USE_POWER_PINS
+
+`ifdef SIM
+
+    `include "defines.v"
+    `include "user_defines.v"
+    `include "pads.v"
+
+    /* NOTE: Need to pass the PDK root directory to iverilog with option -I */
+
+		
+
+    `ifdef GL
+	`include "gl/digital_pll.v"
+	`include "gl/caravel_clocking.v"
+	`include "gl/user_id_programming.v"
+	`include "gl/chip_io.v"
+	`include "gl/housekeeping.v"
+	`include "gl/mprj_logic_high.v"
+	`include "gl/mprj2_logic_high.v"
+	`include "gl/mgmt_protect.v"
+//	`include "gl/mgmt_protect_hv.v"
+	`include "gl/constant_block.v"
+	`include "gl/gpio_control_block.v"
+	`include "gl/gpio_defaults_block.v"
+	//`include "gl/gpio_defaults_block_0403.v"
+	//`include "gl/gpio_defaults_block_1803.v"
+	//`include "gl/gpio_defaults_block_0801.v"
+	//`include "gl/gpio_signal_buffering.v"
+	`include "gl/gpio_logic_high.v"
+	`include "gl/xres_buf.v"
+	`include "gl/spare_logic_block.v"
+	//`include "gl/mgmt_defines.v"
+	`include "gl/mgmt_core_wrapper.v"
+	//`include "gl/caravel.v"
+        //`include "pc3b03ed_wrapper.v"
+        //`include "pc3d21.v"
+       // `include "pc3d01.v"
+        //`include "pt3b02.v"
+    `else
+        `include "pc3b03ed_wrapper.v"
+        `include "pc3d21.v"
+        `include "pc3d01_wrapper.v"
+	`include "pt3b02_wrapper.v"
+	`include "digital_pll.v"
+	`include "digital_pll_controller.v"
+	`include "ring_osc2x13.v"
+	`include "caravel_clocking.v"
+	`include "user_id_programming.v"
+	`include "clock_div.v"
+	`include "mprj_io.v"
+	`include "chip_io.v"
+	`include "housekeeping_spi.v"
+	`include "housekeeping.v"
+	`include "mprj_logic_high.v"
+	`include "mprj2_logic_high.v"
+	`include "mgmt_protect.v"
+	`include "mgmt_protect_hv.v"
+	`include "constant_block.v"
+	`include "gpio_control_block.v"
+	`include "gpio_defaults_block.v"
+	`include "gpio_signal_buffering.v" // need to ask why this is there functionality wise - TIM
+	`include "gpio_logic_high.v"
+	`include "xres_buf.v"
+	`include "spare_logic_block.v"
+	`include "mgmt_core_wrapper.v"
+	`include "vsdcaravel.v"
+	//ritesh balaji s
+	`include "/home/rbalajis/vsd_task/vsdRiscvScl180/rtl/scl180_wrapper/pt3b02_wrapper.v"
+               
+    `endif
+
+    `include "dummy_por.v"
+
+`endif
+// `default_nettype none
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+/*--------------------------------------------------------------*/
+/* Vsdcaravel, RISC-V SoC Implementation using Synopsys and SCL180 PDK,*/
+/* a project for the VSD/Semiconductor Laboratory SCL180	           */
+/* fabrication process 			                                       */
+/*                                                          	       */
+/* Copyright 2025 efabless, Inc. /VSD                           	   */
+/* Originally written by Tim Edwards, December 2019                    */
+/* and Mohamed Shalan, August 2020			    	                   */
+/* Edited by Dhanvanti Bhavsar and Kunal Ghosh on (11/02/2025)		   */
+/* Updated on 11/02/2025:  Revised using SCL180 PDK	                   */
+/* Apache 2.0 license.  See file LICENSE.                   	*/
+/*								*/
+/* The caravel_openframe is a chip top level design conforming	*/
+/* to the pad locations and assignments used by the Caravel and	*/
+/* Caravan chips top level definition.  However, it does not	*/
+/* define any embedded processor or other interfaces.		*/
+/*								*/
+/* The padframe of caravel_openframe consists of the same 38	*/
+/* general-purpose I/O pads as Caravel.  The pads formerly	*/
+/* used by Caravel for dedicated functions of the management	*/
+/* SoC (flash controller CSB, SCK, IO0 and IO1, gpio, and	*/
+/* clock) are redefined as additional general-purpose I/O for	*/
+/* a total of 44 GPIO pads.  The resetb pad retains its		*/
+/* function as an input pin with weak pull-up with high and	*/
+/* low voltage domain (3.3V and 1.8V) versions of the output	*/
+/* exported to the chip project core.  The user may elect to	*/
+/* use the reset pin for a purpose other than a master reset.	*/
+/*								*/
+/* The padframe implements a simple power-on reset circuit, and	*/
+/* provides a 32-bit bus in the 1.8V digital domain consisting	*/
+/* of the (fixed) user project ID.				*/
+/*								*/
+/* Each GPIO pad must be configured by the user project.  The	*/
+/* padframe exports constant value "1" and "0" bits in the 1.8V	*/
+/* domain for each GPIO pad that can be used by the user	*/
+/* project to loop back to the GPIO to set a static		*/
+/* configuration on power-up.					*/
+/*								*/
+/* Every user project must instantiate a module called		*/
+/* "openframe_project_wrapper" that connects to all of the	*/
+/* signals as defined in the module call, below.  The layout	*/
+/* of the user project must correspond to the provided wrapper	*/
+/* cell layout, describing the position of signal and power	*/
+/* pins on the perimeter of the wrapper.			*/
+/*								*/
+/* Bon voyage!							*/
+/*--------------------------------------------------------------*/
+
+/*--------------------------------------------------------------*/
+/* NOTE:  This file can be checked for syntax directly using:	*/
+/*								*/
+/* iverilog -I ${PDK_ROOT}/${PDK} -DSIM -DFUNCTIONAL \		*/
+/* openframe_netlists.v __openframe_project_wrapper.v \		*/
+/* -s caravel_openframe						*/
+/*--------------------------------------------------------------*/
+
+module caravel_openframe (
+
+    // All top-level I/O are package-facing pins
+
+    inout vddio,	// Common 3.3V padframe/ESD power
+    inout vddio_2,	// Common 3.3V padframe/ESD power
+    inout vssio,	// Common padframe/ESD ground
+    inout vssio_2,	// Common padframe/ESD ground
+    inout vdda,		// Management 3.3V power
+    inout vssa,		// Common analog ground
+    inout vccd,		// Management/Common 1.8V power
+    inout vssd,		// Common digital ground
+    inout vdda1,	// User area 1 3.3V power
+    inout vdda1_2,	// User area 1 3.3V power
+    inout vdda2,	// User area 2 3.3V power
+    inout vssa1,	// User area 1 analog ground
+    inout vssa1_2,	// User area 1 analog ground
+    inout vssa2,	// User area 2 analog ground
+    inout vccd1,	// User area 1 1.8V power
+    inout vccd2,	// User area 2 1.8V power
+    inout vssd1,	// User area 1 digital ground
+    inout vssd2,	// User area 2 digital ground
+
+    inout [`OPENFRAME_IO_PADS-1:0] gpio,
+    input resetb	// Reset input (sense inverted)
+);
+
+    //------------------------------------------------------------
+    // This value is uniquely defined for each user project.
+    //------------------------------------------------------------
+    parameter USER_PROJECT_ID = 32'h00000000;
+
+    // Project Control (pad-facing)
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_inp_dis;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_oeb;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_ib_mode_sel;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_vtrip_sel;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_slow_sel;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_holdover;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_analog_en;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_analog_sel;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_analog_pol;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_dm0;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_dm1;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_dm2;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_in;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_in_h;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_out;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_loopback_zero;
+    wire [`OPENFRAME_IO_PADS-1:0] gpio_loopback_one;
+    wire [`OPENFRAME_IO_PADS-1:0] analog_io;
+    wire [`OPENFRAME_IO_PADS-1:0] analog_noesd_io;
+
+    // Power-on-reset signal.  The simple POR circuit generates these
+    // three signals, uses them to enable the GPIO, and exports the
+    // signals to the core.
+
+    wire porb_h;
+    wire porb_l;
+    wire por_l;
+
+    // Master reset signal.  The reset pad generates the sense-inverted
+    // reset at 3.3V.  The 1.8V signal is derived.
+
+    wire rstb_h;
+    wire rstb_l;
+
+    // Mask revision:  Output from the padframe, exporting the 32-bit
+    // user ID value.
+
+    wire [31:0] mask_rev;
+
+    chip_io_openframe #(
+		.USER_PROJECT_ID(USER_PROJECT_ID)
+	) padframe (
+	
+	// Pad side power connections
+	`ifndef TOP_ROUTING
+		// Package Pins
+		.vddio_pad	(vddio),		// Common padframe/ESD supply
+		.vddio_pad2	(vddio_2),
+		.vssio_pad	(vssio),		// Common padframe/ESD ground
+		.vssio_pad2	(vssio_2),
+		.vccd_pad	(vccd),			// Common 1.8V supply
+		.vssd_pad	(vssd),			// Common digital ground
+		.vdda_pad	(vdda),			// Management analog 3.3V supply
+		.vssa_pad	(vssa),			// Management analog ground
+		.vdda1_pad	(vdda1),		// User area 1 3.3V supply
+		.vdda1_pad2	(vdda1_2),		
+		.vdda2_pad	(vdda2),		// User area 2 3.3V supply
+		.vssa1_pad	(vssa1),		// User area 1 analog ground
+		.vssa1_pad2	(vssa1_2),
+		.vssa2_pad	(vssa2),		// User area 2 analog ground
+		.vccd1_pad	(vccd1),		// User area 1 1.8V supply
+		.vccd2_pad	(vccd2),		// User area 2 1.8V supply
+		.vssd1_pad	(vssd1),		// User area 1 digital ground
+		.vssd2_pad	(vssd2),		// User area 2 digital ground
+	`endif
+
+	// Pad side signals
+	.resetb_pad(resetb),
+	.gpio(gpio),
+
+	// Core side power connections
+	.vddio	(vddio_core),
+	.vssio	(vssio_core),
+	.vdda	(vdda_core),
+	.vssa	(vssa_core),
+	.vccd	(vccd_core),
+	.vssd	(vssd_core),
+	.vdda1	(vdda1_core),
+	.vdda2	(vdda2_core),
+	.vssa1	(vssa1_core),
+	.vssa2	(vssa2_core),
+	.vccd1	(vccd1_core),
+	.vccd2	(vccd2_core),
+	.vssd1	(vssd1_core),
+	.vssd2	(vssd2_core),
+
+	// Core side signals
+	.porb_h(porb_h),
+	.porb_l(porb_l),
+	.por_l(por_l),
+	.resetb_h(rstb_h),
+	.resetb_l(rstb_l),
+	.mask_rev(mask_rev),
+
+	.gpio_in(gpio_in),
+	.gpio_in_h(gpio_in_h),
+	.gpio_out(gpio_out),
+	.gpio_oeb(gpio_oeb),
+	.gpio_inp_dis(gpio_inp_dis),
+	.gpio_ib_mode_sel(gpio_ib_mode_sel),
+	.gpio_vtrip_sel(gpio_vtrip_sel),
+	.gpio_slow_sel(gpio_slow_sel),
+	.gpio_holdover(gpio_holdover),
+	.gpio_analog_en(gpio_analog_en),
+	.gpio_analog_sel(gpio_analog_sel),
+	.gpio_analog_pol(gpio_analog_pol),
+	.gpio_dm0(gpio_dm0),
+	.gpio_dm1(gpio_dm1),
+	.gpio_dm2(gpio_dm2),
+	.gpio_loopback_zero(gpio_loopback_zero),
+	.gpio_loopback_one(gpio_loopback_one),
+	.analog_io(analog_io),
+	.analog_noesd_io(analog_noesd_io)
+    );
+
+    /*--------------------------------------------------*/
+    /* Wrapper module around the user project 		*/
+    /*--------------------------------------------------*/
+
+    openframe_project_wrapper user_project (
+        `ifdef USE_POWER_PINS
+	    .vdda(vdda_core),
+	    .vssa(vssa_core),
+	    .vccd(vccd_core),
+	    .vssd(vssd_core),
+	    .vdda1(vdda1_core),		// User area 1 3.3V power
+	    .vdda2(vdda2_core),		// User area 2 3.3V power
+	    .vssa1(vssa1_core),		// User area 1 analog ground
+	    .vssa2(vssa2_core),		// User area 2 analog ground
+	    .vccd1(vccd1_core),		// User area 1 1.8V power
+	    .vccd2(vccd2_core),		// User area 2 1.8V power
+	    .vssd1(vssd1_core),		// User area 1 digital ground
+	    .vssd2(vssd2_core),		// User area 2 digital ground
+    	`endif
+
+	.porb_h(porb_h),
+	.porb_l(porb_l),
+	.por_l(por_l),
+	.resetb_h(rstb_h),
+	.resetb_l(rstb_l),
+	.mask_rev(mask_rev),
+
+	.gpio_in(gpio_in),
+	.gpio_in_h(gpio_in_h),
+	.gpio_out(gpio_out),
+	.gpio_oeb(gpio_oeb),
+	.gpio_inp_dis(gpio_inp_dis),
+	.gpio_ib_mode_sel(gpio_ib_mode_sel),
+	.gpio_vtrip_sel(gpio_vtrip_sel),
+	.gpio_slow_sel(gpio_slow_sel),
+	.gpio_holdover(gpio_holdover),
+	.gpio_analog_en(gpio_analog_en),
+	.gpio_analog_sel(gpio_analog_sel),
+	.gpio_analog_pol(gpio_analog_pol),
+	.gpio_dm0(gpio_dm0),
+	.gpio_dm1(gpio_dm1),
+	.gpio_dm2(gpio_dm2),
+	.gpio_loopback_zero(gpio_loopback_zero),
+	.gpio_loopback_one(gpio_loopback_one),
+	.analog_io(analog_io),
+	.analog_noesd_io(analog_noesd_io)
+    );
+
+    /*------------------------------------------*/
+    /* End user project instantiation		*/
+    /*------------------------------------------*/
+
+endmodule
+// `default_nettype wire
+module caravel_power_routing ();
+endmodule
+ `ifdef SIM
+ `default_nettype wire
+ `endif
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+/*--------------------------------------------------------------*/
+//* Vsdcaravel, RISC-V SoC Implementation using Synopsys and SCL180 PDK,*/
+/* a project for the VSD/Semiconductor Laboratory SCL180	           */
+/* fabrication process 			                                       */
+/*                                                          	       */
+/* Copyright 2025 efabless, Inc. /VSD                           	   */
+/* Originally written by Tim Edwards, December 2019                    */
+/* and Mohamed Shalan, August 2020			    	                   */
+/* Edited by Dhanvanti Bhavsar and Kunal Ghosh on (11/02/2025)		   */
+/* Updated on 11/02/2025:  Revised using SCL180 PDK	                   */
+/* This file is open source hardware released under the     	       */
+/* Apache 2.0 license.  See file LICENSE.                   	       */
+/* from housekeeping.v (refactoring a number of functions from	*/
+/* the management SoC).						*/
+/*                                                          	*/
+/*--------------------------------------------------------------*/
+
+`include "copyright_block.v"
+`include "caravel_logo.v"
+`include "caravel_motto.v"
+`include "open_source.v"
+`include "user_id_textblock.v"
+`include "caravel_core.v"
+
+module caravel (
+    // All top-level I/O are package-facing pins
+    inout                     vddio,    // Common 3.3V padframe/ESD power
+    inout                     vddio_2,  // Common 3.3V padframe/ESD power
+    inout                     vssio,    // Common padframe/ESD ground
+    inout                     vssio_2,  // Common padframe/ESD ground
+    inout                     vdda,     // Management 3.3V power
+    inout                     vssa,     // Common analog ground
+    inout                     vccd,     // Management/Common 1.8V power
+    inout                     vssd,     // Common digital ground
+    inout                     vdda1,    // User area 1 3.3V power
+    inout                     vdda1_2,  // User area 1 3.3V power
+    inout                     vdda2,    // User area 2 3.3V power
+    inout                     vssa1,    // User area 1 analog ground
+    inout                     vssa1_2,  // User area 1 analog ground
+    inout                     vssa2,    // User area 2 analog ground
+    inout                     vccd1,    // User area 1 1.8V power
+    inout                     vccd2,    // User area 2 1.8V power
+    inout                     vssd1,    // User area 1 digital ground
+    inout                     vssd2,    // User area 2 digital ground	
+    inout                     gpio,     // Used for external LDO control
+    inout [`MPRJ_IO_PADS-1:0] mprj_io,
+    input                     clock,    // CMOS core clock input, not a crystal
+    input                     resetb,   // Reset input (Active Low)
+
+    // Note that only two flash data pins are dedicated to the
+    // management SoC wrapper.  The management SoC exports the
+    // quad SPI mode status to make use of the top two mprj_io
+    // pins for io2 and io3.
+    output flash_csb,
+    output flash_clk,
+    inout  flash_io0,
+    inout  flash_io1
+);
+
+  //------------------------------------------------------------
+  // This value is uniquely defined for each user project.
+  //------------------------------------------------------------
+  parameter USER_PROJECT_ID = 32'h00000000;
+
+  /*
+     *--------------------------------------------------------------------
+     * These pins are overlaid on mprj_io space. They have the function
+     * below when the management processor is in reset, or in the default
+     * configuration. They are assigned to uses in the user space by the
+     * configuration program running off of the SPI flash.  Note that even
+     * when the user has taken control of these pins, they can be restored
+     * to the original use by setting the resetb pin low.  The SPI pins and
+     * UART pins can be connected directly to an FTDI chip as long as the
+     * FTDI chip sets these lines to high impedence (input function) at
+     * all times except when holding the chip in reset.
+     *
+     * JTAG			= mprj_io[0]		(inout)
+     * SDO			= mprj_io[1]		(output)
+     * SDI			= mprj_io[2]		(input)
+     * CSB			= mprj_io[3]		(input)
+     * SCK			= mprj_io[4]		(input)
+     * ser_rx		= mprj_io[5]		(input)
+     * ser_tx		= mprj_io[6]		(output)
+     * irq			= mprj_io[7]		(input)
+     *
+     * spi_sck		= mprj_io[32]		(output)
+     * spi_csb		= mprj_io[33]		(output)
+     * spi_sdi		= mprj_io[34]		(input)
+     * spi_sdo		= mprj_io[35]		(output)
+     * flash_io2	= mprj_io[36]		(inout) 
+     * flash_io3	= mprj_io[37]		(inout) 
+     *
+     * These pins are reserved for any project that wants to incorporate
+     * its own processor and flash controller.  While a user project can
+     * technically use any available I/O pins for the purpose, these
+     * four pins connect to a pass-through mode from the SPI slave (pins
+     * 1-4 above) so that any SPI flash connected to these specific pins
+     * can be accessed through the SPI slave even when the processor is in
+     * reset.
+     *
+     * user_flash_csb = mprj_io[8]
+     * user_flash_sck = mprj_io[9]
+     * user_flash_io0 = mprj_io[10]
+     * user_flash_io1 = mprj_io[11]
+     *
+     *--------------------------------------------------------------------
+     */
+
+  // One-bit GPIO dedicated to management SoC (outside of user control)
+  wire gpio_out_core;
+  wire gpio_in_core;
+  wire gpio_mode0_core;
+  wire gpio_mode1_core;
+  wire gpio_outenb_core;
+  wire gpio_inenb_core;
+
+  // User Project Control (pad-facing)
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_inp_dis;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_oeb;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_ib_mode_sel;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_vtrip_sel;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_slow_sel;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_holdover;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_analog_en;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_analog_sel;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_analog_pol;
+  wire [`MPRJ_IO_PADS*3-1:0] mprj_io_dm;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_in;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_out;
+  wire [`MPRJ_IO_PADS-1:0] mprj_io_one;
+
+  // User Project Control (user-facing)
+  // NOT NEEDED
+  wire [`MPRJ_IO_PADS-10:0] user_analog_io;
+
+  // User Project Control management I/O
+  // There are two types of GPIO connections:
+  // (1) Full Bidirectional: Management connects to in, out, and oeb
+  //     Uses:  JTAG and SDO
+  // (2) Selectable bidirectional:  Management connects to in and out,
+  //	   which are tied together.  oeb is grounded (oeb from the
+  //	   configuration is used)
+
+  // SDI		= mprj_io[2]		(input)
+  // CSB		= mprj_io[3]		(input)
+  // SCK		= mprj_io[4]		(input)
+  // ser_rx	= mprj_io[5]		(input)
+  // ser_tx	= mprj_io[6]		(output)
+  // irq		= mprj_io[7]		(input)
+
+  wire clock_core;
+
+  // Power-on-reset signal.  The reset pad generates the sense-inverted
+  // reset at 3.3V.  The 1.8V signal and the inverted 1.8V signal are
+  // derived.
+
+  wire porb_h;
+  wire porb_l;
+  wire por_l;
+
+  wire rstb_h;
+
+  // Flash SPI communication (
+  wire flash_clk_frame;
+  wire flash_csb_frame;
+  wire flash_clk_oeb, flash_csb_oeb;
+  wire flash_clk_ieb, flash_csb_ieb;
+  wire flash_io0_oeb, flash_io1_oeb;
+  wire flash_io0_ieb, flash_io1_ieb;
+  wire flash_io0_do, flash_io1_do;
+  wire flash_io0_di, flash_io1_di;
+
+  wire vddio_core;
+  wire vssio_core;
+  wire vdda_core;
+  wire vssa_core;
+  wire vccd_core;
+  wire vssd_core;
+  wire vdda1_core;
+  wire vdda2_core;
+  wire vssa1_core;
+  wire vssa2_core;
+  wire vccd1_core;
+  wire vccd2_core;
+  wire vssd1_core;
+  wire vssd2_core;
+
+  chip_io padframe (
+`ifndef TOP_ROUTING
+      // Package Pins
+      .vddio_pad(vddio),  // Common padframe/ESD supply
+      .vddio_pad2(vddio_2),
+      .vssio_pad(vssio),  // Common padframe/ESD ground
+      .vssio_pad2(vssio_2),
+      .vccd_pad(vccd),  // Common 1.8V supply
+      .vssd_pad(vssd),  // Common digital ground
+      .vdda_pad(vdda),  // Management analog 3.3V supply
+      .vssa_pad(vssa),  // Management analog ground
+      .vdda1_pad(vdda1),  // User area 1 3.3V supply
+      .vdda1_pad2(vdda1_2),
+      .vdda2_pad(vdda2),  // User area 2 3.3V supply
+      .vssa1_pad(vssa1),  // User area 1 analog ground
+      .vssa1_pad2(vssa1_2),
+      .vssa2_pad(vssa2),  // User area 2 analog ground
+      .vccd1_pad(vccd1),  // User area 1 1.8V supply
+      .vccd2_pad(vccd2),  // User area 2 1.8V supply
+      .vssd1_pad(vssd1),  // User area 1 digital ground
+      .vssd2_pad(vssd2),  // User area 2 digital ground
+      .vddio(vddio_core),
+      .vssio(vssio_core),
+      .vdda(vdda_core),
+      .vssa(vssa_core),
+      .vccd(vccd_core),
+      .vssd(vssd_core),
+      .vdda1(vdda1_core),
+      .vdda2(vdda2_core),
+      .vssa1(vssa1_core),
+      .vssa2(vssa2_core),
+      .vccd1(vccd1_core),
+      .vccd2(vccd2_core),
+      .vssd1(vssd1_core),
+      .vssd2(vssd2_core),
+      
+      // Core Side Pins
+      .gpio(gpio),
+      .mprj_io(mprj_io),
+      .clock(clock),
+      .resetb(resetb),
+      .flash_csb(flash_csb),
+      .flash_clk(flash_clk),
+      .flash_io0(flash_io0),
+      .flash_io1(flash_io1),
+`endif
+
+      // SoC Core Interface
+      .porb_h(porb_h),
+      .por(por_l),
+      .resetb_core_h(rstb_h),
+      .clock_core(clock_core),
+      .gpio_out_core(gpio_out_core),
+      .gpio_in_core(gpio_in_core),
+      .gpio_mode0_core(gpio_mode0_core),
+      .gpio_mode1_core(gpio_mode1_core),
+      .gpio_outenb_core(gpio_outenb_core),
+      .gpio_inenb_core(gpio_inenb_core),
+      .flash_csb_core(flash_csb_frame),
+      .flash_clk_core(flash_clk_frame),
+      .flash_csb_oeb_core(flash_csb_oeb),
+      .flash_clk_oeb_core(flash_clk_oeb),
+      .flash_io0_oeb_core(flash_io0_oeb),
+      .flash_io1_oeb_core(flash_io1_oeb),
+      .flash_io0_ieb_core(flash_io0_ieb),
+      .flash_io1_ieb_core(flash_io1_ieb),
+      .flash_io0_do_core(flash_io0_do),
+      .flash_io1_do_core(flash_io1_do),
+      .flash_io0_di_core(flash_io0_di),
+      .flash_io1_di_core(flash_io1_di),
+      .mprj_io_one(mprj_io_one),
+      .mprj_io_in(mprj_io_in),
+      .mprj_io_out(mprj_io_out),
+      .mprj_io_oeb(mprj_io_oeb),
+      .mprj_io_inp_dis(mprj_io_inp_dis),
+      .mprj_io_ib_mode_sel(mprj_io_ib_mode_sel),
+      .mprj_io_vtrip_sel(mprj_io_vtrip_sel),
+      .mprj_io_slow_sel(mprj_io_slow_sel),
+      .mprj_io_holdover(mprj_io_holdover),
+      .mprj_io_analog_en(mprj_io_analog_en),
+      .mprj_io_analog_sel(mprj_io_analog_sel),
+      .mprj_io_analog_pol(mprj_io_analog_pol),
+      .mprj_io_dm(mprj_io_dm),
+      .mprj_analog_io(user_analog_io)
+  );
+
+  caravel_core chip_core (
+      // All top-level I/O are package-facing pins
+`ifdef USE_POWER_PINS
+      .vddio(vddio_core),  // Common 3.3V padframe/ESD power
+      .vssio(vssio_core),  // Common padframe/ESD ground
+//    .vdda (vdda_core),   // Management 3.3V power
+//    .vssa (vssa_core),   // Common analog ground
+      .vccd (vccd_core),   // Management/Common 1.8V power
+      .vssd (vssd_core),   // Common digital ground
+      .vdda1(vdda1_core),  // User area 1 3.3V power
+      .vdda2(vdda2_core),  // User area 2 3.3V power
+      .vssa1(vssa1_core),  // User area 1 analog ground
+      .vssa2(vssa2_core),  // User area 2 analog ground
+      .vccd1(vccd1_core),  // User area 1 1.8V power
+      .vccd2(vccd2_core),  // User area 2 1.8V power
+      .vssd1(vssd1_core),  // User area 1 digital ground
+      .vssd2(vssd2_core),  // User area 2 digital ground	
+`endif
+
+      // SoC Core Interface
+      .porb_h(porb_h),
+      .por_l(por_l),
+      .rstb_h(rstb_h),
+      .clock_core(clock_core),
+      .gpio_out_core(gpio_out_core),
+      .gpio_in_core(gpio_in_core),
+      .gpio_mode0_core(gpio_mode0_core),
+      .gpio_mode1_core(gpio_mode1_core),
+      .gpio_outenb_core(gpio_outenb_core),
+      .gpio_inenb_core(gpio_inenb_core),
+
+      // Flash SPI communication
+      .flash_csb_frame(flash_csb_frame),
+      .flash_clk_frame(flash_clk_frame),
+      .flash_csb_oeb(flash_csb_oeb),
+      .flash_clk_oeb(flash_clk_oeb),
+      .flash_io0_oeb(flash_io0_oeb),
+      .flash_io1_oeb(flash_io1_oeb),
+      .flash_io0_ieb(flash_io0_ieb),
+      .flash_io1_ieb(flash_io1_ieb),
+      .flash_io0_do(flash_io0_do),
+      .flash_io1_do(flash_io1_do),
+      .flash_io0_di(flash_io0_di),
+      .flash_io1_di(flash_io1_di),
+
+      // User project IOs
+      .mprj_io_in(mprj_io_in),
+      .mprj_io_out(mprj_io_out),
+      .mprj_io_oeb(mprj_io_oeb),
+      .mprj_io_inp_dis(mprj_io_inp_dis),
+      .mprj_io_ib_mode_sel(mprj_io_ib_mode_sel),
+      .mprj_io_vtrip_sel(mprj_io_vtrip_sel),
+      .mprj_io_slow_sel(mprj_io_slow_sel),
+      .mprj_io_holdover(mprj_io_holdover),
+      .mprj_io_analog_en(mprj_io_analog_en),
+      .mprj_io_analog_sel(mprj_io_analog_sel),
+      .mprj_io_analog_pol(mprj_io_analog_pol),
+      .mprj_io_dm(mprj_io_dm),
+
+      // Loopbacks to constant value 1 in the 1.8V domain
+      .mprj_io_one(mprj_io_one),
+
+      // User project direct access to gpio pad connections for analog
+      // (all but the lowest-numbered 7 pads)
+      .mprj_analog_io(user_analog_io)
+  );
+
+copyright_block copyright_block();
+caravel_logo caravel_logo();
+caravel_motto caravel_motto();
+open_source open_source();
+user_id_textblock user_id_textblock();
+
+endmodule
+// `default_nettype wire
+
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+// `default_nettype none
+
+//Ritesh Balaji S
+/*
+`include "/home/rbalajis/vsd_task/vsdRiscvScl180/rtl/scl180_wrapper/pc3d01_wrapper.v"
+`include "/home/rbalajis/vsd_task/vsdRiscvScl180/rtl/scl180_wrapper/pt3b02_wrapper.v"
+`include "/home/rbalajis/vsd_task/vsdRiscvScl180/rtl/scl180_wrapper/pc3b03ed_wrapper.v"
+`include "/home/rbalajis/vsd_task/vsdRiscvScl180/rtl/constant_block.v"
+`include "/home/rbalajis/vsd_task/vsdRiscvScl180/rtl/mprj_io.v"
+
+`include "/home/Synopsys/pdk/SCL_PDK_3/SCLPDK_V3.0_KIT/scl180/iopad/cio250/4M1L/verilog/tsl18cio250/zero/pc3d21.v"
+
+*/
+
+
+
+module chip_io(
+	// Package Pins
+	inout  vddio_pad,		// Common padframe/ESD supply
+	inout  vddio_pad2,
+	inout  vssio_pad,		// Common padframe/ESD ground
+	inout  vssio_pad2,
+	inout  vccd_pad,		// Common 1.8V supply
+	inout  vssd_pad,		// Common digital ground
+	inout  vdda_pad,		// Management analog 3.3V supply
+	inout  vssa_pad,		// Management analog ground
+	inout  vdda1_pad,		// User area 1 3.3V supply
+	inout  vdda1_pad2,		
+	inout  vdda2_pad,		// User area 2 3.3V supply
+	inout  vssa1_pad,		// User area 1 analog ground
+	inout  vssa1_pad2,
+	inout  vssa2_pad,		// User area 2 analog ground
+	inout  vccd1_pad,		// User area 1 1.8V supply
+	inout  vccd2_pad,		// User area 2 1.8V supply
+	inout  vssd1_pad,		// User area 1 digital ground
+	inout  vssd2_pad,		// User area 2 digital ground
+
+	// Core Side
+	inout  vddio,		// Common padframe/ESD supply
+	inout  vssio,		// Common padframe/ESD ground
+	inout  vccd,		// Common 1.8V supply
+	inout  vssd,		// Common digital ground
+	inout  vdda,		// Management analog 3.3V supply
+	inout  vssa,		// Management analog ground
+	inout  vdda1,		// User area 1 3.3V supply
+	inout  vdda2,		// User area 2 3.3V supply
+	inout  vssa1,		// User area 1 analog ground
+	inout  vssa2,		// User area 2 analog ground
+	inout  vccd1,		// User area 1 1.8V supply
+	inout  vccd2,		// User area 2 1.8V supply
+	inout  vssd1,		// User area 1 digital ground
+	inout  vssd2,		// User area 2 digital ground
+
+	inout  gpio,
+	input  clock,
+	input  resetb,
+	output flash_csb,
+	output flash_clk,
+	inout  flash_io0,
+	inout  flash_io1,
+	// Chip Core Interface
+	input  porb_h,
+	input  por,
+	output resetb_core_h,
+	output clock_core,
+	input  gpio_out_core,
+	output gpio_in_core,
+	input  gpio_mode0_core,
+	input  gpio_mode1_core,
+	input  gpio_outenb_core,
+	input  gpio_inenb_core,
+	inout  flash_csb_core,
+	inout  flash_clk_core,
+	input  flash_csb_oeb_core,
+	input  flash_clk_oeb_core,
+	input  flash_io0_oeb_core,
+	input  flash_io1_oeb_core,
+	input  flash_io0_ieb_core,
+	input  flash_io1_ieb_core,
+	input  flash_io0_do_core,
+	input  flash_io1_do_core,
+	output flash_io0_di_core,
+	output flash_io1_di_core,
+	// User project IOs
+	// we will be using only mprj_io, mprj_io_out, mprj_io_oeb
+	inout [`MPRJ_IO_PADS-1:0] mprj_io,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_out,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_oeb,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_inp_dis,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_ib_mode_sel,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_vtrip_sel,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_slow_sel,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_holdover,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_analog_en,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_analog_sel,
+	input [`MPRJ_IO_PADS-1:0] mprj_io_analog_pol,
+	input [`MPRJ_IO_PADS*3-1:0] mprj_io_dm,
+	output [`MPRJ_IO_PADS-1:0] mprj_io_in,
+	// Loopbacks to constant value 1 in the 1.8V domain
+	input [`MPRJ_IO_PADS-1:0] mprj_io_one,
+	// User project direct access to gpio pad connections for analog
+	// (all but the lowest-numbered 7 pads)
+	inout [`MPRJ_IO_PADS-10:0] mprj_analog_io
+);
+
+    wire [`MPRJ_IO_PADS-1:0] dummy_mprj_io_in;
+    // To be considered:  Master hold signal on all user pads (?)
+    // For now, set holdh_n to 1 internally (NOTE:  This is in the
+    // VDDIO 3.3V domain)
+    // and setting enh to porb_h.
+
+    wire [`MPRJ_IO_PADS-1:0] mprj_io_enh;
+
+    assign mprj_io_enh = {`MPRJ_IO_PADS{porb_h}};
+	
+	wire analog_a, analog_b;
+	wire vddio_q, vssio_q;
+	// updating for pads.
+	wire \dm_all[0] ;
+        wire \dm_all[1] ;
+        wire \dm_all[2] ;        
+          wire \flash_io0_mode[0] ;
+  wire \flash_io0_mode[1] ;
+  wire \flash_io0_mode[2] ;
+  wire \flash_io1_mode[0] ;
+  wire \flash_io1_mode[1] ;
+  wire \flash_io1_mode[2] ;
+wire \mprj_pads.analog_a ;
+  wire \mprj_pads.analog_b ;
+  wire \mprj_pads.analog_en[0] ;
+  wire \mprj_pads.analog_en[10] ;
+  wire \mprj_pads.analog_en[11] ;
+  wire \mprj_pads.analog_en[12] ;
+  wire \mprj_pads.analog_en[13] ;
+  wire \mprj_pads.analog_en[14] ;
+  wire \mprj_pads.analog_en[15] ;
+  wire \mprj_pads.analog_en[16] ;
+  wire \mprj_pads.analog_en[17] ;
+  wire \mprj_pads.analog_en[18] ;
+  wire \mprj_pads.analog_en[19] ;
+  wire \mprj_pads.analog_en[1] ;
+  wire \mprj_pads.analog_en[20] ;
+  wire \mprj_pads.analog_en[21] ;
+  wire \mprj_pads.analog_en[22] ;
+  wire \mprj_pads.analog_en[23] ;
+  wire \mprj_pads.analog_en[24] ;
+  wire \mprj_pads.analog_en[25] ;
+  wire \mprj_pads.analog_en[26] ;
+  wire \mprj_pads.analog_en[27] ;
+  wire \mprj_pads.analog_en[28] ;
+  wire \mprj_pads.analog_en[29] ;
+  wire \mprj_pads.analog_en[2] ;
+  wire \mprj_pads.analog_en[30] ;
+  wire \mprj_pads.analog_en[31] ;
+  wire \mprj_pads.analog_en[32] ;
+  wire \mprj_pads.analog_en[33] ;
+  wire \mprj_pads.analog_en[34] ;
+  wire \mprj_pads.analog_en[35] ;
+  wire \mprj_pads.analog_en[36] ;
+  wire \mprj_pads.analog_en[37] ;
+  wire \mprj_pads.analog_en[3] ;
+  wire \mprj_pads.analog_en[4] ;
+  wire \mprj_pads.analog_en[5] ;
+  wire \mprj_pads.analog_en[6] ;
+  wire \mprj_pads.analog_en[7] ;
+  wire \mprj_pads.analog_en[8] ;
+  wire \mprj_pads.analog_en[9] ;
+  wire \mprj_pads.analog_io[0] ;
+  wire \mprj_pads.analog_io[10] ;
+  wire \mprj_pads.analog_io[11] ;
+  wire \mprj_pads.analog_io[12] ;
+  wire \mprj_pads.analog_io[13] ;
+  wire \mprj_pads.analog_io[14] ;
+  wire \mprj_pads.analog_io[15] ;
+  wire \mprj_pads.analog_io[16] ;
+  wire \mprj_pads.analog_io[17] ;
+  wire \mprj_pads.analog_io[18] ;
+  wire \mprj_pads.analog_io[19] ;
+  wire \mprj_pads.analog_io[1] ;
+  wire \mprj_pads.analog_io[20] ;
+  wire \mprj_pads.analog_io[21] ;
+  wire \mprj_pads.analog_io[22] ;
+  wire \mprj_pads.analog_io[23] ;
+  wire \mprj_pads.analog_io[24] ;
+  wire \mprj_pads.analog_io[25] ;
+  wire \mprj_pads.analog_io[26] ;
+  wire \mprj_pads.analog_io[27] ;
+  wire \mprj_pads.analog_io[28] ;
+  wire \mprj_pads.analog_io[29] ;
+  wire \mprj_pads.analog_io[2] ;
+  wire \mprj_pads.analog_io[30] ;
+  wire \mprj_pads.analog_io[3] ;
+  wire \mprj_pads.analog_io[4] ;
+  wire \mprj_pads.analog_io[5] ;
+  wire \mprj_pads.analog_io[6] ;
+  wire \mprj_pads.analog_io[7] ;
+  wire \mprj_pads.analog_io[8] ;
+  wire \mprj_pads.analog_io[9] ;
+  wire \mprj_pads.analog_pol[0] ;
+  wire \mprj_pads.analog_pol[10] ;
+  wire \mprj_pads.analog_pol[11] ;
+  wire \mprj_pads.analog_pol[12] ;
+  wire \mprj_pads.analog_pol[13] ;
+  wire \mprj_pads.analog_pol[14] ;
+  wire \mprj_pads.analog_pol[15] ;
+  wire \mprj_pads.analog_pol[16] ;
+  wire \mprj_pads.analog_pol[17] ;
+  wire \mprj_pads.analog_pol[18] ;
+  wire \mprj_pads.analog_pol[19] ;
+  wire \mprj_pads.analog_pol[1] ;
+  wire \mprj_pads.analog_pol[20] ;
+  wire \mprj_pads.analog_pol[21] ;
+  wire \mprj_pads.analog_pol[22] ;
+  wire \mprj_pads.analog_pol[23] ;
+  wire \mprj_pads.analog_pol[24] ;
+  wire \mprj_pads.analog_pol[25] ;
+  wire \mprj_pads.analog_pol[26] ;
+  wire \mprj_pads.analog_pol[27] ;
+  wire \mprj_pads.analog_pol[28] ;
+  wire \mprj_pads.analog_pol[29] ;
+  wire \mprj_pads.analog_pol[2] ;
+  wire \mprj_pads.analog_pol[30] ;
+  wire \mprj_pads.analog_pol[31] ;
+  wire \mprj_pads.analog_pol[32] ;
+  wire \mprj_pads.analog_pol[33] ;
+  wire \mprj_pads.analog_pol[34] ;
+  wire \mprj_pads.analog_pol[35] ;
+  wire \mprj_pads.analog_pol[36] ;
+  wire \mprj_pads.analog_pol[37] ;
+  wire \mprj_pads.analog_pol[3] ;
+  wire \mprj_pads.analog_pol[4] ;
+  wire \mprj_pads.analog_pol[5] ;
+  wire \mprj_pads.analog_pol[6] ;
+  wire \mprj_pads.analog_pol[7] ;
+  wire \mprj_pads.analog_pol[8] ;
+  wire \mprj_pads.analog_pol[9] ;
+  wire \mprj_pads.analog_sel[0] ;
+  wire \mprj_pads.analog_sel[10] ;
+  wire \mprj_pads.analog_sel[11] ;
+  wire \mprj_pads.analog_sel[12] ;
+  wire \mprj_pads.analog_sel[13] ;
+  wire \mprj_pads.analog_sel[14] ;
+  wire \mprj_pads.analog_sel[15] ;
+  wire \mprj_pads.analog_sel[16] ;
+  wire \mprj_pads.analog_sel[17] ;
+  wire \mprj_pads.analog_sel[18] ;
+  wire \mprj_pads.analog_sel[19] ;
+  wire \mprj_pads.analog_sel[1] ;
+  wire \mprj_pads.analog_sel[20] ;
+  wire \mprj_pads.analog_sel[21] ;
+  wire \mprj_pads.analog_sel[22] ;
+  wire \mprj_pads.analog_sel[23] ;
+  wire \mprj_pads.analog_sel[24] ;
+  wire \mprj_pads.analog_sel[25] ;
+  wire \mprj_pads.analog_sel[26] ;
+  wire \mprj_pads.analog_sel[27] ;
+  wire \mprj_pads.analog_sel[28] ;
+  wire \mprj_pads.analog_sel[29] ;
+  wire \mprj_pads.analog_sel[2] ;
+  wire \mprj_pads.analog_sel[30] ;
+  wire \mprj_pads.analog_sel[31] ;
+  wire \mprj_pads.analog_sel[32] ;
+  wire \mprj_pads.analog_sel[33] ;
+  wire \mprj_pads.analog_sel[34] ;
+  wire \mprj_pads.analog_sel[35] ;
+  wire \mprj_pads.analog_sel[36] ;
+  wire \mprj_pads.analog_sel[37] ;
+  wire \mprj_pads.analog_sel[3] ;
+  wire \mprj_pads.analog_sel[4] ;
+  wire \mprj_pads.analog_sel[5] ;
+  wire \mprj_pads.analog_sel[6] ;
+  wire \mprj_pads.analog_sel[7] ;
+  wire \mprj_pads.analog_sel[8] ;
+  wire \mprj_pads.analog_sel[9] ;
+  wire \mprj_pads.dm[0] ;
+  wire \mprj_pads.dm[100] ;
+  wire \mprj_pads.dm[101] ;
+  wire \mprj_pads.dm[102] ;
+  wire \mprj_pads.dm[103] ;
+  wire \mprj_pads.dm[104] ;
+  wire \mprj_pads.dm[105] ;
+  wire \mprj_pads.dm[106] ;
+  wire \mprj_pads.dm[107] ;
+  wire \mprj_pads.dm[108] ;
+  wire \mprj_pads.dm[109] ;
+  wire \mprj_pads.dm[10] ;
+  wire \mprj_pads.dm[110] ;
+  wire \mprj_pads.dm[111] ;
+  wire \mprj_pads.dm[112] ;
+  wire \mprj_pads.dm[113] ;
+  wire \mprj_pads.dm[11] ;
+  wire \mprj_pads.dm[12] ;
+  wire \mprj_pads.dm[13] ;
+  wire \mprj_pads.dm[14] ;
+  wire \mprj_pads.dm[15] ;
+  wire \mprj_pads.dm[16] ;
+  wire \mprj_pads.dm[17] ;
+  wire \mprj_pads.dm[18] ;
+  wire \mprj_pads.dm[19] ;
+  wire \mprj_pads.dm[1] ;
+  wire \mprj_pads.dm[20] ;
+  wire \mprj_pads.dm[21] ;
+  wire \mprj_pads.dm[22] ;
+  wire \mprj_pads.dm[23] ;
+  wire \mprj_pads.dm[24] ;
+  wire \mprj_pads.dm[25] ;
+  wire \mprj_pads.dm[26] ;
+  wire \mprj_pads.dm[27] ;
+  wire \mprj_pads.dm[28] ;
+  wire \mprj_pads.dm[29] ;
+  wire \mprj_pads.dm[2] ;
+  wire \mprj_pads.dm[30] ;
+  wire \mprj_pads.dm[31] ;
+  wire \mprj_pads.dm[32] ;
+  wire \mprj_pads.dm[33] ;
+  wire \mprj_pads.dm[34] ;
+  wire \mprj_pads.dm[35] ;
+  wire \mprj_pads.dm[36] ;
+  wire \mprj_pads.dm[37] ;
+  wire \mprj_pads.dm[38] ;
+  wire \mprj_pads.dm[39] ;
+  wire \mprj_pads.dm[3] ;
+  wire \mprj_pads.dm[40] ;
+  wire \mprj_pads.dm[41] ;
+  wire \mprj_pads.dm[42] ;
+  wire \mprj_pads.dm[43] ;
+  wire \mprj_pads.dm[44] ;
+  wire \mprj_pads.dm[45] ;
+  wire \mprj_pads.dm[46] ;
+  wire \mprj_pads.dm[47] ;
+  wire \mprj_pads.dm[48] ;
+  wire \mprj_pads.dm[49] ;
+  wire \mprj_pads.dm[4] ;
+  wire \mprj_pads.dm[50] ;
+  wire \mprj_pads.dm[51] ;
+  wire \mprj_pads.dm[52] ;
+  wire \mprj_pads.dm[53] ;
+  wire \mprj_pads.dm[54] ;
+  wire \mprj_pads.dm[55] ;
+  wire \mprj_pads.dm[56] ;
+  wire \mprj_pads.dm[57] ;
+  wire \mprj_pads.dm[58] ;
+  wire \mprj_pads.dm[59] ;
+  wire \mprj_pads.dm[5] ;
+  wire \mprj_pads.dm[60] ;
+  wire \mprj_pads.dm[61] ;
+  wire \mprj_pads.dm[62] ;
+  wire \mprj_pads.dm[63] ;
+  wire \mprj_pads.dm[64] ;
+  wire \mprj_pads.dm[65] ;
+  wire \mprj_pads.dm[66] ;
+  wire \mprj_pads.dm[67] ;
+  wire \mprj_pads.dm[68] ;
+  wire \mprj_pads.dm[69] ;
+  wire \mprj_pads.dm[6] ;
+  wire \mprj_pads.dm[70] ;
+  wire \mprj_pads.dm[71] ;
+  wire \mprj_pads.dm[72] ;
+  wire \mprj_pads.dm[73] ;
+  wire \mprj_pads.dm[74] ;
+  wire \mprj_pads.dm[75] ;
+  wire \mprj_pads.dm[76] ;
+  wire \mprj_pads.dm[77] ;
+  wire \mprj_pads.dm[78] ;
+  wire \mprj_pads.dm[79] ;
+  wire \mprj_pads.dm[7] ;
+  wire \mprj_pads.dm[80] ;
+  wire \mprj_pads.dm[81] ;
+  wire \mprj_pads.dm[82] ;
+  wire \mprj_pads.dm[83] ;
+  wire \mprj_pads.dm[84] ;
+  wire \mprj_pads.dm[85] ;
+  wire \mprj_pads.dm[86] ;
+  wire \mprj_pads.dm[87] ;
+  wire \mprj_pads.dm[88] ;
+  wire \mprj_pads.dm[89] ;
+  wire \mprj_pads.dm[8] ;
+  wire \mprj_pads.dm[90] ;
+  wire \mprj_pads.dm[91] ;
+  wire \mprj_pads.dm[92] ;
+  wire \mprj_pads.dm[93] ;
+  wire \mprj_pads.dm[94] ;
+  wire \mprj_pads.dm[95] ;
+  wire \mprj_pads.dm[96] ;
+  wire \mprj_pads.dm[97] ;
+  wire \mprj_pads.dm[98] ;
+  wire \mprj_pads.dm[99] ;
+  wire \mprj_pads.dm[9] ;
+  wire \mprj_pads.enh[0] ;
+  wire \mprj_pads.enh[10] ;
+  wire \mprj_pads.enh[11] ;
+  wire \mprj_pads.enh[12] ;
+  wire \mprj_pads.enh[13] ;
+  wire \mprj_pads.enh[14] ;
+  wire \mprj_pads.enh[15] ;
+  wire \mprj_pads.enh[16] ;
+  wire \mprj_pads.enh[17] ;
+  wire \mprj_pads.enh[18] ;
+  wire \mprj_pads.enh[19] ;
+  wire \mprj_pads.enh[1] ;
+  wire \mprj_pads.enh[20] ;
+  wire \mprj_pads.enh[21] ;
+  wire \mprj_pads.enh[22] ;
+  wire \mprj_pads.enh[23] ;
+  wire \mprj_pads.enh[24] ;
+  wire \mprj_pads.enh[25] ;
+  wire \mprj_pads.enh[26] ;
+  wire \mprj_pads.enh[27] ;
+  wire \mprj_pads.enh[28] ;
+  wire \mprj_pads.enh[29] ;
+  wire \mprj_pads.enh[2] ;
+  wire \mprj_pads.enh[30] ;
+  wire \mprj_pads.enh[31] ;
+  wire \mprj_pads.enh[32] ;
+  wire \mprj_pads.enh[33] ;
+  wire \mprj_pads.enh[34] ;
+  wire \mprj_pads.enh[35] ;
+  wire \mprj_pads.enh[36] ;
+  wire \mprj_pads.enh[37] ;
+  wire \mprj_pads.enh[3] ;
+  wire \mprj_pads.enh[4] ;
+  wire \mprj_pads.enh[5] ;
+  wire \mprj_pads.enh[6] ;
+  wire \mprj_pads.enh[7] ;
+  wire \mprj_pads.enh[8] ;
+  wire \mprj_pads.enh[9] ;
+  wire \mprj_pads.hldh_n[0] ;
+  wire \mprj_pads.hldh_n[10] ;
+  wire \mprj_pads.hldh_n[11] ;
+  wire \mprj_pads.hldh_n[12] ;
+  wire \mprj_pads.hldh_n[13] ;
+  wire \mprj_pads.hldh_n[14] ;
+  wire \mprj_pads.hldh_n[15] ;
+  wire \mprj_pads.hldh_n[16] ;
+  wire \mprj_pads.hldh_n[17] ;
+  wire \mprj_pads.hldh_n[18] ;
+  wire \mprj_pads.hldh_n[19] ;
+  wire \mprj_pads.hldh_n[1] ;
+  wire \mprj_pads.hldh_n[20] ;
+  wire \mprj_pads.hldh_n[21] ;
+  wire \mprj_pads.hldh_n[22] ;
+  wire \mprj_pads.hldh_n[23] ;
+  wire \mprj_pads.hldh_n[24] ;
+  wire \mprj_pads.hldh_n[25] ;
+  wire \mprj_pads.hldh_n[26] ;
+  wire \mprj_pads.hldh_n[27] ;
+  wire \mprj_pads.hldh_n[28] ;
+  wire \mprj_pads.hldh_n[29] ;
+  wire \mprj_pads.hldh_n[2] ;
+  wire \mprj_pads.hldh_n[30] ;
+  wire \mprj_pads.hldh_n[31] ;
+  wire \mprj_pads.hldh_n[32] ;
+  wire \mprj_pads.hldh_n[33] ;
+  wire \mprj_pads.hldh_n[34] ;
+  wire \mprj_pads.hldh_n[35] ;
+  wire \mprj_pads.hldh_n[36] ;
+  wire \mprj_pads.hldh_n[37] ;
+  wire \mprj_pads.hldh_n[3] ;
+  wire \mprj_pads.hldh_n[4] ;
+  wire \mprj_pads.hldh_n[5] ;
+  wire \mprj_pads.hldh_n[6] ;
+  wire \mprj_pads.hldh_n[7] ;
+  wire \mprj_pads.hldh_n[8] ;
+  wire \mprj_pads.hldh_n[9] ;
+  wire \mprj_pads.holdover[0] ;
+  wire \mprj_pads.holdover[10] ;
+  wire \mprj_pads.holdover[11] ;
+  wire \mprj_pads.holdover[12] ;
+  wire \mprj_pads.holdover[13] ;
+  wire \mprj_pads.holdover[14] ;
+  wire \mprj_pads.holdover[15] ;
+  wire \mprj_pads.holdover[16] ;
+  wire \mprj_pads.holdover[17] ;
+  wire \mprj_pads.holdover[18] ;
+  wire \mprj_pads.holdover[19] ;
+  wire \mprj_pads.holdover[1] ;
+  wire \mprj_pads.holdover[20] ;
+  wire \mprj_pads.holdover[21] ;
+  wire \mprj_pads.holdover[22] ;
+  wire \mprj_pads.holdover[23] ;
+  wire \mprj_pads.holdover[24] ;
+  wire \mprj_pads.holdover[25] ;
+  wire \mprj_pads.holdover[26] ;
+  wire \mprj_pads.holdover[27] ;
+  wire \mprj_pads.holdover[28] ;
+  wire \mprj_pads.holdover[29] ;
+  wire \mprj_pads.holdover[2] ;
+  wire \mprj_pads.holdover[30] ;
+  wire \mprj_pads.holdover[31] ;
+  wire \mprj_pads.holdover[32] ;
+  wire \mprj_pads.holdover[33] ;
+  wire \mprj_pads.holdover[34] ;
+  wire \mprj_pads.holdover[35] ;
+  wire \mprj_pads.holdover[36] ;
+  wire \mprj_pads.holdover[37] ;
+  wire \mprj_pads.holdover[3] ;
+  wire \mprj_pads.holdover[4] ;
+  wire \mprj_pads.holdover[5] ;
+  wire \mprj_pads.holdover[6] ;
+  wire \mprj_pads.holdover[7] ;
+  wire \mprj_pads.holdover[8] ;
+  wire \mprj_pads.holdover[9] ;
+  wire \mprj_pads.ib_mode_sel[0] ;
+  wire \mprj_pads.ib_mode_sel[10] ;
+  wire \mprj_pads.ib_mode_sel[11] ;
+  wire \mprj_pads.ib_mode_sel[12] ;
+  wire \mprj_pads.ib_mode_sel[13] ;
+  wire \mprj_pads.ib_mode_sel[14] ;
+  wire \mprj_pads.ib_mode_sel[15] ;
+  wire \mprj_pads.ib_mode_sel[16] ;
+  wire \mprj_pads.ib_mode_sel[17] ;
+  wire \mprj_pads.ib_mode_sel[18] ;
+  wire \mprj_pads.ib_mode_sel[19] ;
+  wire \mprj_pads.ib_mode_sel[1] ;
+  wire \mprj_pads.ib_mode_sel[20] ;
+  wire \mprj_pads.ib_mode_sel[21] ;
+  wire \mprj_pads.ib_mode_sel[22] ;
+  wire \mprj_pads.ib_mode_sel[23] ;
+  wire \mprj_pads.ib_mode_sel[24] ;
+  wire \mprj_pads.ib_mode_sel[25] ;
+  wire \mprj_pads.ib_mode_sel[26] ;
+  wire \mprj_pads.ib_mode_sel[27] ;
+  wire \mprj_pads.ib_mode_sel[28] ;
+  wire \mprj_pads.ib_mode_sel[29] ;
+  wire \mprj_pads.ib_mode_sel[2] ;
+  wire \mprj_pads.ib_mode_sel[30] ;
+  wire \mprj_pads.ib_mode_sel[31] ;
+  wire \mprj_pads.ib_mode_sel[32] ;
+  wire \mprj_pads.ib_mode_sel[33] ;
+  wire \mprj_pads.ib_mode_sel[34] ;
+  wire \mprj_pads.ib_mode_sel[35] ;
+  wire \mprj_pads.ib_mode_sel[36] ;
+  wire \mprj_pads.ib_mode_sel[37] ;
+  wire \mprj_pads.ib_mode_sel[3] ;
+  wire \mprj_pads.ib_mode_sel[4] ;
+  wire \mprj_pads.ib_mode_sel[5] ;
+  wire \mprj_pads.ib_mode_sel[6] ;
+  wire \mprj_pads.ib_mode_sel[7] ;
+  wire \mprj_pads.ib_mode_sel[8] ;
+  wire \mprj_pads.ib_mode_sel[9] ;
+  wire \mprj_pads.inp_dis[0] ;
+  wire \mprj_pads.inp_dis[10] ;
+  wire \mprj_pads.inp_dis[11] ;
+  wire \mprj_pads.inp_dis[12] ;
+  wire \mprj_pads.inp_dis[13] ;
+  wire \mprj_pads.inp_dis[14] ;
+  wire \mprj_pads.inp_dis[15] ;
+  wire \mprj_pads.inp_dis[16] ;
+  wire \mprj_pads.inp_dis[17] ;
+  wire \mprj_pads.inp_dis[18] ;
+  wire \mprj_pads.inp_dis[19] ;
+  wire \mprj_pads.inp_dis[1] ;
+  wire \mprj_pads.inp_dis[20] ;
+  wire \mprj_pads.inp_dis[21] ;
+  wire \mprj_pads.inp_dis[22] ;
+  wire \mprj_pads.inp_dis[23] ;
+  wire \mprj_pads.inp_dis[24] ;
+  wire \mprj_pads.inp_dis[25] ;
+  wire \mprj_pads.inp_dis[26] ;
+  wire \mprj_pads.inp_dis[27] ;
+  wire \mprj_pads.inp_dis[28] ;
+  wire \mprj_pads.inp_dis[29] ;
+  wire \mprj_pads.inp_dis[2] ;
+  wire \mprj_pads.inp_dis[30] ;
+  wire \mprj_pads.inp_dis[31] ;
+  wire \mprj_pads.inp_dis[32] ;
+  wire \mprj_pads.inp_dis[33] ;
+  wire \mprj_pads.inp_dis[34] ;
+  wire \mprj_pads.inp_dis[35] ;
+  wire \mprj_pads.inp_dis[36] ;
+  wire \mprj_pads.inp_dis[37] ;
+  wire \mprj_pads.inp_dis[3] ;
+  wire \mprj_pads.inp_dis[4] ;
+  wire \mprj_pads.inp_dis[5] ;
+  wire \mprj_pads.inp_dis[6] ;
+  wire \mprj_pads.inp_dis[7] ;
+  wire \mprj_pads.inp_dis[8] ;
+  wire \mprj_pads.inp_dis[9] ;
+  wire \mprj_pads.io[0] ;
+  wire \mprj_pads.io[10] ;
+  wire \mprj_pads.io[11] ;
+  wire \mprj_pads.io[12] ;
+  wire \mprj_pads.io[13] ;
+  wire \mprj_pads.io[14] ;
+  wire \mprj_pads.io[15] ;
+  wire \mprj_pads.io[16] ;
+  wire \mprj_pads.io[17] ;
+  wire \mprj_pads.io[18] ;
+  wire \mprj_pads.io[19] ;
+  wire \mprj_pads.io[1] ;
+  wire \mprj_pads.io[20] ;
+  wire \mprj_pads.io[21] ;
+  wire \mprj_pads.io[22] ;
+  wire \mprj_pads.io[23] ;
+  wire \mprj_pads.io[24] ;
+  wire \mprj_pads.io[25] ;
+  wire \mprj_pads.io[26] ;
+  wire \mprj_pads.io[27] ;
+  wire \mprj_pads.io[28] ;
+  wire \mprj_pads.io[29] ;
+  wire \mprj_pads.io[2] ;
+  wire \mprj_pads.io[30] ;
+  wire \mprj_pads.io[31] ;
+  wire \mprj_pads.io[32] ;
+  wire \mprj_pads.io[33] ;
+  wire \mprj_pads.io[34] ;
+  wire \mprj_pads.io[35] ;
+  wire \mprj_pads.io[36] ;
+  wire \mprj_pads.io[37] ;
+  wire \mprj_pads.io[3] ;
+  wire \mprj_pads.io[4] ;
+  wire \mprj_pads.io[5] ;
+  wire \mprj_pads.io[6] ;
+  wire \mprj_pads.io[7] ;
+  wire \mprj_pads.io[8] ;
+  wire \mprj_pads.io[9] ;
+  wire \mprj_pads.io_in[0] ;
+  wire \mprj_pads.io_in[10] ;
+  wire \mprj_pads.io_in[11] ;
+  wire \mprj_pads.io_in[12] ;
+  wire \mprj_pads.io_in[13] ;
+  wire \mprj_pads.io_in[14] ;
+  wire \mprj_pads.io_in[15] ;
+  wire \mprj_pads.io_in[16] ;
+  wire \mprj_pads.io_in[17] ;
+  wire \mprj_pads.io_in[18] ;
+  wire \mprj_pads.io_in[19] ;
+  wire \mprj_pads.io_in[1] ;
+  wire \mprj_pads.io_in[20] ;
+  wire \mprj_pads.io_in[21] ;
+  wire \mprj_pads.io_in[22] ;
+  wire \mprj_pads.io_in[23] ;
+  wire \mprj_pads.io_in[24] ;
+  wire \mprj_pads.io_in[25] ;
+  wire \mprj_pads.io_in[26] ;
+  wire \mprj_pads.io_in[27] ;
+  wire \mprj_pads.io_in[28] ;
+  wire \mprj_pads.io_in[29] ;
+  wire \mprj_pads.io_in[2] ;
+  wire \mprj_pads.io_in[30] ;
+  wire \mprj_pads.io_in[31] ;
+  wire \mprj_pads.io_in[32] ;
+  wire \mprj_pads.io_in[33] ;
+  wire \mprj_pads.io_in[34] ;
+  wire \mprj_pads.io_in[35] ;
+  wire \mprj_pads.io_in[36] ;
+  wire \mprj_pads.io_in[37] ;
+  wire \mprj_pads.io_in[3] ;
+  wire \mprj_pads.io_in[4] ;
+  wire \mprj_pads.io_in[5] ;
+  wire \mprj_pads.io_in[6] ;
+  wire \mprj_pads.io_in[7] ;
+  wire \mprj_pads.io_in[8] ;
+  wire \mprj_pads.io_in[9] ;
+  wire \mprj_pads.io_out[0] ;
+  wire \mprj_pads.io_out[10] ;
+  wire \mprj_pads.io_out[11] ;
+  wire \mprj_pads.io_out[12] ;
+  wire \mprj_pads.io_out[13] ;
+  wire \mprj_pads.io_out[14] ;
+  wire \mprj_pads.io_out[15] ;
+  wire \mprj_pads.io_out[16] ;
+  wire \mprj_pads.io_out[17] ;
+  wire \mprj_pads.io_out[18] ;
+  wire \mprj_pads.io_out[19] ;
+  wire \mprj_pads.io_out[1] ;
+  wire \mprj_pads.io_out[20] ;
+  wire \mprj_pads.io_out[21] ;
+  wire \mprj_pads.io_out[22] ;
+  wire \mprj_pads.io_out[23] ;
+  wire \mprj_pads.io_out[24] ;
+  wire \mprj_pads.io_out[25] ;
+  wire \mprj_pads.io_out[26] ;
+  wire \mprj_pads.io_out[27] ;
+  wire \mprj_pads.io_out[28] ;
+  wire \mprj_pads.io_out[29] ;
+  wire \mprj_pads.io_out[2] ;
+  wire \mprj_pads.io_out[30] ;
+  wire \mprj_pads.io_out[31] ;
+  wire \mprj_pads.io_out[32] ;
+  wire \mprj_pads.io_out[33] ;
+  wire \mprj_pads.io_out[34] ;
+  wire \mprj_pads.io_out[35] ;
+  wire \mprj_pads.io_out[36] ;
+  wire \mprj_pads.io_out[37] ;
+  wire \mprj_pads.io_out[3] ;
+  wire \mprj_pads.io_out[4] ;
+  wire \mprj_pads.io_out[5] ;
+  wire \mprj_pads.io_out[6] ;
+  wire \mprj_pads.io_out[7] ;
+  wire \mprj_pads.io_out[8] ;
+  wire \mprj_pads.io_out[9] ;
+  wire \mprj_pads.loop1_io[0] ;
+  wire \mprj_pads.loop1_io[10] ;
+  wire \mprj_pads.loop1_io[11] ;
+  wire \mprj_pads.loop1_io[12] ;
+  wire \mprj_pads.loop1_io[13] ;
+  wire \mprj_pads.loop1_io[14] ;
+  wire \mprj_pads.loop1_io[15] ;
+  wire \mprj_pads.loop1_io[16] ;
+  wire \mprj_pads.loop1_io[17] ;
+  wire \mprj_pads.loop1_io[18] ;
+  wire \mprj_pads.loop1_io[19] ;
+  wire \mprj_pads.loop1_io[1] ;
+  wire \mprj_pads.loop1_io[20] ;
+  wire \mprj_pads.loop1_io[21] ;
+  wire \mprj_pads.loop1_io[22] ;
+  wire \mprj_pads.loop1_io[23] ;
+  wire \mprj_pads.loop1_io[24] ;
+  wire \mprj_pads.loop1_io[25] ;
+  wire \mprj_pads.loop1_io[26] ;
+  wire \mprj_pads.loop1_io[27] ;
+  wire \mprj_pads.loop1_io[28] ;
+  wire \mprj_pads.loop1_io[29] ;
+  wire \mprj_pads.loop1_io[2] ;
+  wire \mprj_pads.loop1_io[30] ;
+  wire \mprj_pads.loop1_io[31] ;
+  wire \mprj_pads.loop1_io[32] ;
+  wire \mprj_pads.loop1_io[33] ;
+  wire \mprj_pads.loop1_io[34] ;
+  wire \mprj_pads.loop1_io[35] ;
+  wire \mprj_pads.loop1_io[36] ;
+  wire \mprj_pads.loop1_io[37] ;
+  wire \mprj_pads.loop1_io[3] ;
+  wire \mprj_pads.loop1_io[4] ;
+  wire \mprj_pads.loop1_io[5] ;
+  wire \mprj_pads.loop1_io[6] ;
+  wire \mprj_pads.loop1_io[7] ;
+  wire \mprj_pads.loop1_io[8] ;
+  wire \mprj_pads.loop1_io[9] ;
+  wire \mprj_pads.no_connect[0] ;
+  wire \mprj_pads.no_connect[1] ;
+  wire \mprj_pads.no_connect[2] ;
+  wire \mprj_pads.no_connect[3] ;
+  wire \mprj_pads.no_connect[4] ;
+  wire \mprj_pads.no_connect[5] ;
+  wire \mprj_pads.no_connect[6] ;
+  wire \mprj_pads.oeb[0] ;
+  wire \mprj_pads.oeb[10] ;
+  wire \mprj_pads.oeb[11] ;
+  wire \mprj_pads.oeb[12] ;
+  wire \mprj_pads.oeb[13] ;
+  wire \mprj_pads.oeb[14] ;
+  wire \mprj_pads.oeb[15] ;
+  wire \mprj_pads.oeb[16] ;
+  wire \mprj_pads.oeb[17] ;
+  wire \mprj_pads.oeb[18] ;
+  wire \mprj_pads.oeb[19] ;
+  wire \mprj_pads.oeb[1] ;
+  wire \mprj_pads.oeb[20] ;
+  wire \mprj_pads.oeb[21] ;
+  wire \mprj_pads.oeb[22] ;
+  wire \mprj_pads.oeb[23] ;
+  wire \mprj_pads.oeb[24] ;
+  wire \mprj_pads.oeb[25] ;
+  wire \mprj_pads.oeb[26] ;
+  wire \mprj_pads.oeb[27] ;
+  wire \mprj_pads.oeb[28] ;
+  wire \mprj_pads.oeb[29] ;
+  wire \mprj_pads.oeb[2] ;
+  wire \mprj_pads.oeb[30] ;
+  wire \mprj_pads.oeb[31] ;
+  wire \mprj_pads.oeb[32] ;
+  wire \mprj_pads.oeb[33] ;
+  wire \mprj_pads.oeb[34] ;
+  wire \mprj_pads.oeb[35] ;
+  wire \mprj_pads.oeb[36] ;
+  wire \mprj_pads.oeb[37] ;
+  wire \mprj_pads.oeb[3] ;
+  wire \mprj_pads.oeb[4] ;
+  wire \mprj_pads.oeb[5] ;
+  wire \mprj_pads.oeb[6] ;
+  wire \mprj_pads.oeb[7] ;
+  wire \mprj_pads.oeb[8] ;
+  wire \mprj_pads.oeb[9] ;
+  wire \mprj_pads.porb_h ;
+  wire \mprj_pads.slow_sel[0] ;
+  wire \mprj_pads.slow_sel[10] ;
+  wire \mprj_pads.slow_sel[11] ;
+  wire \mprj_pads.slow_sel[12] ;
+  wire \mprj_pads.slow_sel[13] ;
+  wire \mprj_pads.slow_sel[14] ;
+  wire \mprj_pads.slow_sel[15] ;
+  wire \mprj_pads.slow_sel[16] ;
+  wire \mprj_pads.slow_sel[17] ;
+  wire \mprj_pads.slow_sel[18] ;
+  wire \mprj_pads.slow_sel[19] ;
+  wire \mprj_pads.slow_sel[1] ;
+  wire \mprj_pads.slow_sel[20] ;
+  wire \mprj_pads.slow_sel[21] ;
+  wire \mprj_pads.slow_sel[22] ;
+  wire \mprj_pads.slow_sel[23] ;
+  wire \mprj_pads.slow_sel[24] ;
+  wire \mprj_pads.slow_sel[25] ;
+  wire \mprj_pads.slow_sel[26] ;
+  wire \mprj_pads.slow_sel[27] ;
+  wire \mprj_pads.slow_sel[28] ;
+  wire \mprj_pads.slow_sel[29] ;
+  wire \mprj_pads.slow_sel[2] ;
+  wire \mprj_pads.slow_sel[30] ;
+  wire \mprj_pads.slow_sel[31] ;
+  wire \mprj_pads.slow_sel[32] ;
+  wire \mprj_pads.slow_sel[33] ;
+  wire \mprj_pads.slow_sel[34] ;
+  wire \mprj_pads.slow_sel[35] ;
+  wire \mprj_pads.slow_sel[36] ;
+  wire \mprj_pads.slow_sel[37] ;
+  wire \mprj_pads.slow_sel[3] ;
+  wire \mprj_pads.slow_sel[4] ;
+  wire \mprj_pads.slow_sel[5] ;
+  wire \mprj_pads.slow_sel[6] ;
+  wire \mprj_pads.slow_sel[7] ;
+  wire \mprj_pads.slow_sel[8] ;
+  wire \mprj_pads.slow_sel[9] ;
+  wire \mprj_pads.vccd ;
+  wire \mprj_pads.vccd1 ;
+  wire \mprj_pads.vccd2 ;
+  wire \mprj_pads.vdda ;
+  wire \mprj_pads.vdda1 ;
+  wire \mprj_pads.vdda2 ;
+  wire \mprj_pads.vddio ;
+  wire \mprj_pads.vddio_q ;
+  wire \mprj_pads.vssa ;
+  wire \mprj_pads.vssa1 ;
+  wire \mprj_pads.vssa2 ;
+  wire \mprj_pads.vssd ;
+  wire \mprj_pads.vssd1 ;
+  wire \mprj_pads.vssd2 ;
+  wire \mprj_pads.vssio ;
+  wire \mprj_pads.vssio_q ;
+  wire \mprj_pads.vtrip_sel[0] ;
+  wire \mprj_pads.vtrip_sel[10] ;
+  wire \mprj_pads.vtrip_sel[11] ;
+  wire \mprj_pads.vtrip_sel[12] ;
+  wire \mprj_pads.vtrip_sel[13] ;
+  wire \mprj_pads.vtrip_sel[14] ;
+  wire \mprj_pads.vtrip_sel[15] ;
+  wire \mprj_pads.vtrip_sel[16] ;
+  wire \mprj_pads.vtrip_sel[17] ;
+  wire \mprj_pads.vtrip_sel[18] ;
+  wire \mprj_pads.vtrip_sel[19] ;
+  wire \mprj_pads.vtrip_sel[1] ;
+  wire \mprj_pads.vtrip_sel[20] ;
+  wire \mprj_pads.vtrip_sel[21] ;
+  wire \mprj_pads.vtrip_sel[22] ;
+  wire \mprj_pads.vtrip_sel[23] ;
+  wire \mprj_pads.vtrip_sel[24] ;
+  wire \mprj_pads.vtrip_sel[25] ;
+  wire \mprj_pads.vtrip_sel[26] ;
+  wire \mprj_pads.vtrip_sel[27] ;
+  wire \mprj_pads.vtrip_sel[28] ;
+  wire \mprj_pads.vtrip_sel[29] ;
+  wire \mprj_pads.vtrip_sel[2] ;
+  wire \mprj_pads.vtrip_sel[30] ;
+  wire \mprj_pads.vtrip_sel[31] ;
+  wire \mprj_pads.vtrip_sel[32] ;
+  wire \mprj_pads.vtrip_sel[33] ;
+  wire \mprj_pads.vtrip_sel[34] ;
+  wire \mprj_pads.vtrip_sel[35] ;
+  wire \mprj_pads.vtrip_sel[36] ;
+  wire \mprj_pads.vtrip_sel[37] ;
+  wire \mprj_pads.vtrip_sel[3] ;
+  wire \mprj_pads.vtrip_sel[4] ;
+  wire \mprj_pads.vtrip_sel[5] ;
+  wire \mprj_pads.vtrip_sel[6] ;
+  wire \mprj_pads.vtrip_sel[7] ;
+  wire \mprj_pads.vtrip_sel[8] ;
+  wire \mprj_pads.vtrip_sel[9] ;
+
+
+
+
+	// Instantiate power and ground pads for management domain
+	// 12 pads:  vddio, vssio, vdda, vssa, vccd, vssd
+	// One each HV and LV clamp.
+
+	// HV clamps connect between one HV power rail and one ground
+	// LV clamps have two clamps connecting between any two LV power
+	// rails and grounds, and one back-to-back diode which connects
+	// between the first LV clamp ground and any other ground.
+	assign vddio = vddio_pad;
+	assign vddio = vddio_pad2;
+	assign vdda = vdda_pad;
+	assign vccd = vccd_pad;
+	assign vssio = vssio_pad;
+	assign vssa = vssa_pad;
+	assign vssd = vssd_pad;
+	assign vdda1 = vdda1_pad;
+	assign vccd1 = vccd1_pad;
+	assign vdda2 = vdda2_pad;
+	assign vccd2 = vccd2_pad;
+	assign vssa2 = vssa2_pad;
+	assign vssd2 = vssd2_pad; 
+/*	
+    	sky130_ef_io__vddio_hvc_clamped_pad \mgmt_vddio_hvclamp_pad[0]  (
+		`MGMT_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VDDIO_PAD(vddio_pad)
+`endif
+    	);
+
+	// lies in user area 2
+    	sky130_ef_io__vddio_hvc_clamped_pad \mgmt_vddio_hvclamp_pad[1]  (
+		`USER2_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VDDIO_PAD(vddio_pad2)
+`endif
+    	);
+
+    	sky130_ef_io__vdda_hvc_clamped_pad mgmt_vdda_hvclamp_pad (
+		`MGMT_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VDDA_PAD(vdda_pad)
+`endif
+    	);
+*/
+    /*	pvdi mgmt_vccd_lvclamp_pad (
+		.VDD(vccd_pad)
+    	);*/
+ 
+  /*     sky130_ef_io__vccd_lvc_clamped_pad mgmt_vccd_lvclamp_pad (
+		`MGMT_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VCCD_PAD(vccd_pad)
+`endif
+    	);
+
+    	sky130_ef_io__vssio_hvc_clamped_pad \mgmt_vssio_hvclamp_pad[0]  (
+		`MGMT_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VSSIO_PAD(vssio_pad)
+`endif
+    	);
+
+    	sky130_ef_io__vssio_hvc_clamped_pad \mgmt_vssio_hvclamp_pad[1]  (
+		`USER2_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VSSIO_PAD(vssio_pad2)
+`endif
+    	);
+
+    	sky130_ef_io__vssa_hvc_clamped_pad mgmt_vssa_hvclamp_pad (
+		`MGMT_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VSSA_PAD(vssa_pad)
+`endif
+    	);
+
+    	sky130_ef_io__vssd_lvc_clamped_pad mgmt_vssd_lvclamp_pad (
+		`MGMT_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VSSD_PAD(vssd_pad)
+`endif
+    	);
+
+	// Instantiate power and ground pads for user 1 domain
+	// 8 pads:  vdda, vssa, vccd, vssd;  One each HV and LV clamp.
+
+    	sky130_ef_io__vdda_hvc_clamped_pad \user1_vdda_hvclamp_pad[0] (
+		`USER1_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VDDA_PAD(vdda1_pad)
+`endif
+    	);
+
+		sky130_ef_io__vdda_hvc_clamped_pad \user1_vdda_hvclamp_pad[1] (
+		`USER1_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VDDA_PAD(vdda1_pad2)
+`endif 
+    	); 
+*/
+    	/*pvdi user1_vccd_lvclamp_pad (
+		.VDD(vccd1_pad)
+    	);*/
+  /*         	sky130_ef_io__vccd_lvc_clamped3_pad user1_vccd_lvclamp_pad (
+		`USER1_ABUTMENT_PINS
+		.VCCD1(vccd1),
+		.VSSD1(vssd1),
+`ifndef TOP_ROUTING
+		.VCCD_PAD(vccd1_pad)
+`endif
+    	);
+
+    	sky130_ef_io__vssa_hvc_clamped_pad \user1_vssa_hvclamp_pad[0] (
+		`USER1_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VSSA_PAD(vssa1_pad)
+`endif
+    	);
+
+
+    	sky130_ef_io__vssa_hvc_clamped_pad \user1_vssa_hvclamp_pad[1] (
+		`USER1_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VSSA_PAD(vssa1_pad2)
+`endif
+    	);
+
+    	sky130_ef_io__vssd_lvc_clamped3_pad user1_vssd_lvclamp_pad (
+		`USER1_ABUTMENT_PINS
+		.VCCD1(vccd1),
+		.VSSD1(vssd1),
+`ifndef TOP_ROUTING
+		.VSSD_PAD(vssd1_pad)
+`endif
+    	);
+
+	// Instantiate power and ground pads for user 2 domain
+	// 8 pads:  vdda, vssa, vccd, vssd;  One each HV and LV clamp.
+
+    	sky130_ef_io__vdda_hvc_clamped_pad user2_vdda_hvclamp_pad (
+		`USER2_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VDDA_PAD(vdda2_pad)
+`endif
+    	); 
+*/
+    	/* pvdi user2_vccd_lvclamp_pad (
+		.VDD(vccd2_pad)
+    	);*/
+  /*     
+    	sky130_ef_io__vccd_lvc_clamped3_pad user2_vccd_lvclamp_pad (
+		`USER2_ABUTMENT_PINS
+		.VCCD1(vccd2),
+		.VSSD1(vssd2),
+`ifndef TOP_ROUTING
+		.VCCD_PAD(vccd2_pad)
+`endif
+    	);
+
+
+    	sky130_ef_io__vssa_hvc_clamped_pad user2_vssa_hvclamp_pad (
+		`USER2_ABUTMENT_PINS
+`ifndef TOP_ROUTING
+		.VSSA_PAD(vssa2_pad)
+`endif
+    	);
+
+    	sky130_ef_io__vssd_lvc_clamped3_pad user2_vssd_lvclamp_pad (
+		`USER2_ABUTMENT_PINS
+		.VCCD1(vccd2),
+		.VSSD1(vssd2),
+`ifndef TOP_ROUTING
+		.VSSD_PAD(vssd2_pad)
+`endif
+    	);
+*/
+	wire [2:0] dm_all =
+    		{gpio_mode1_core, gpio_mode1_core, gpio_mode0_core};
+	wire[2:0] flash_io0_mode =
+		{flash_io0_ieb_core, flash_io0_ieb_core, flash_io0_oeb_core};
+	wire[2:0] flash_io1_mode =
+		{flash_io1_ieb_core, flash_io1_ieb_core, flash_io1_oeb_core};
+
+    wire [6:0] vccd_const_one;	// Constant value for management pins
+    wire [6:0] vssd_const_zero;	// Constant value for management pins
+
+    constant_block constant_value_inst [6:0] (
+	.vccd(vccd),
+	.vssd(vssd),
+	.one(vccd_const_one),
+	.zero(vssd_const_zero)
+    );
+
+	// Management clock input pad
+	//`INPUT_PAD(clock, clock_core, vccd_const_one[0], vssd_const_zero[0]);
+	//`INPUT_PAD_SCL(clock, clock_core);
+        pc3d01_wrapper clock_pad(.IN(clock_core), .PAD(clock) );
+
+    // Management GPIO pad
+	//`INOUT_PAD(gpio, gpio_in_core, vccd_const_one[1], vssd_const_zero[1], gpio_out_core, gpio_inenb_core, gpio_outenb_core, dm_all);
+	//`INOUT_PAD_SCL(gpio, gpio_in_core, gpio_out_core, gpio_inenb_core, gpio_outenb_core);
+	//INOUT_PAD_SCL
+	//wire dummy;
+        //nand signal_gating (dummy, gpio_inenb_core, gpio_out_core)
+       
+         
+         pc3b03ed_wrapper gpio_pad( .IN(gpio_in_core), .OUT(gpio_out_core), .PAD(gpio), .INPUT_DIS(gpio_inenb_core), .OUT_EN_N(gpio_outenb_core), .dm(dm_all));
+
+	// Management Flash SPI pads
+	//`INOUT_PAD(flash_io0, flash_io0_di_core, vccd_const_one[2], vssd_const_zero[2], flash_io0_do_core, flash_io0_ieb_core, flash_io0_oeb_core, flash_io0_mode);
+
+        pc3b03ed_wrapper flash_io0_pad( .OUT(flash_io0_do_core), .PAD(flash_io0), .IN(flash_io0_di_core), .INPUT_DIS(flash_io0_ieb_core), .OUT_EN_N(flash_io0_oeb_core),.dm(flash_io0_mode));
+		
+	//`INOUT_PAD(flash_io1, flash_io1_di_core, vccd_const_one[3], vssd_const_zero[3], flash_io1_do_core, flash_io1_ieb_core, flash_io1_oeb_core, flash_io1_mode);
+
+        pc3b03ed_wrapper flash_io1_pad( .OUT(flash_io1_do_core), .PAD(flash_io1), .IN(flash_io1_di_core), .INPUT_DIS(flash_io1_ieb_core), .OUT_EN_N(flash_io1_oeb_core),.dm(flash_io1_mode));
+
+        /*`INOUT_PAD_SCL(flash_io0_do_core, flash_io0, flash_io0_di_core, flash_io0_ieb_core, flash_io0_oeb_core, flash_io0_mode);
+        `INOUT_PAD_SCL(flash_io1_do_core ,flash_io1, flash_io1_di_core, flash_io1_ieb_core, flash_io1_oeb_core, flash_io1_mode);
+        `INOUT_PAD_SCL(gpio_out_core, gpio, gpio_in_core, gpio_inenb_core, gpio_outenb_core, dm_all); */
+ 
+	//`OUTPUT_NO_INP_DIS_PAD(flash_csb, flash_csb_core, vccd_const_one[4], vssd_const_zero[4], flash_csb_oeb_core);
+	//`OUTPUT_NO_INP_DIS_PAD(flash_clk, flash_clk_core, vccd_const_one[5], vssd_const_zero[5], flash_clk_oeb_core);
+
+	//`OUTPUT_NO_INP_DIS_SCL(flash_csb, flash_csb_core, flash_csb_oeb_core);
+         pt3b02_wrapper flash_csb_pad(.PAD(flash_csb), .IN(flash_csb_core), .OE_N(flash_csb_oeb_core));	
+         pt3b02_wrapper flash_clk_pad(.PAD(flash_clk), .IN(flash_clk_core), .OE_N(flash_clk_oeb_core));	
+        //`OUTPUT_NO_INP_DIS_SCL(flash_clk, flash_clk_core, flash_clk_oeb_core);
+
+	// NOTE:  The analog_out pad from the raven chip has been replaced by
+    	// the digital reset input resetb on caravel due to the lack of an on-board
+    	// power-on-reset circuit.  The XRES pad is used for providing a glitch-
+    	// free reset.
+
+	/*wire xresloop;
+	wire xres_vss_loop;
+	sky130_fd_io__top_xres4v2 resetb_pad (
+		`MGMT_ABUTMENT_PINS
+		`ifndef	TOP_ROUTING
+		    .PAD(resetb),
+		`endif
+		.TIE_WEAK_HI_H(xresloop),   // Loop-back connection to pad through pad_a_esd_h
+		.TIE_HI_ESD(),
+		.TIE_LO_ESD(xres_vss_loop),
+		.PAD_A_ESD_H(xresloop),
+		.XRES_H_N(resetb_core_h),
+		.DISABLE_PULLUP_H(xres_vss_loop), // 0 = enable pull-up on reset pad
+		.ENABLE_H(porb_h),	 	  // Power-on-reset
+   		.EN_VDDIO_SIG_H(xres_vss_loop),	  // No idea.
+   		.INP_SEL_H(xres_vss_loop),	  // 1 = use filt_in_h else filter the pad input
+   		.FILT_IN_H(xres_vss_loop),	  // Alternate input for glitch filter
+   		.PULLUP_H(xres_vss_loop),	  // Pullup connection for alternate filter input
+		.ENABLE_VDDIO(vccd_const_one[6])
+    	);
+	*/
+	pc3d21 resetb_pad (
+	       .PAD(resetb),
+	       .CIN(resetb_core_h)
+	       );
+	// Corner cells (These are overlay cells;  it is not clear what is normally
+    	// supposed to go under them.)
+
+	/*    sky130_ef_io__corner_pad mgmt_corner [1:0] (
+`ifndef TOP_ROUTING
+		.VSSIO(vssio),
+		.VDDIO(vddio),
+		.VDDIO_Q(vddio_q),
+		.VSSIO_Q(vssio_q),
+		.AMUXBUS_A(analog_a),
+		.AMUXBUS_B(analog_b),
+		.VSSD(vssd),
+		.VSSA(vssa),
+		.VSWITCH(vddio),
+		.VDDA(vdda),
+		.VCCD(vccd),
+		.VCCHIB(vccd)
+`endif
+    	    );
+	    sky130_ef_io__corner_pad user1_corner (
+`ifndef TOP_ROUTING
+		.VSSIO(vssio),
+		.VDDIO(vddio),
+		.VDDIO_Q(vddio_q),
+		.VSSIO_Q(vssio_q),
+		.AMUXBUS_A(analog_a),
+		.AMUXBUS_B(analog_b),
+		.VSSD(vssd),
+		.VSSA(vssa1),
+		.VSWITCH(vddio),
+		.VDDA(vdda1),
+		.VCCD(vccd),
+		.VCCHIB(vccd)
+`endif
+    	    );
+	    sky130_ef_io__corner_pad user2_corner (
+`ifndef TOP_ROUTING
+		.VSSIO(vssio),
+		.VDDIO(vddio),
+		.VDDIO_Q(vddio_q),
+		.VSSIO_Q(vssio_q),
+		.AMUXBUS_A(analog_a),
+		.AMUXBUS_B(analog_b),
+		.VSSD(vssd),
+		.VSSA(vssa2),
+		.VSWITCH(vddio),
+		.VDDA(vdda2),
+		.VCCD(vccd),
+		.VCCHIB(vccd)
+`endif
+    	    );
+*/
+	mprj_io mprj_pads(
+		.vddio(vddio),
+		.vssio(vssio),
+		.vccd(vccd),
+		.vssd(vssd),
+		.vdda1(vdda1),
+		.vdda2(vdda2),
+		.vssa1(vssa1),
+		.vssa2(vssa2),
+		.vddio_q(vddio_q),
+		.vssio_q(vssio_q),
+		.analog_a(analog_a),
+		.analog_b(analog_b),
+		.porb_h(porb_h),
+		.vccd_conb(mprj_io_one),
+		.io(mprj_io),
+		.io_out(mprj_io_out),
+		.oeb(mprj_io_oeb),
+		.enh(mprj_io_enh),
+		.inp_dis(mprj_io_inp_dis),
+		.ib_mode_sel(mprj_io_ib_mode_sel),
+		.vtrip_sel(mprj_io_vtrip_sel),
+		.holdover(mprj_io_holdover),
+		.slow_sel(mprj_io_slow_sel),
+		.analog_en(mprj_io_analog_en),
+		.analog_sel(mprj_io_analog_sel),
+		.analog_pol(mprj_io_analog_pol),
+		.dm(mprj_io_dm),
+		.io_in(mprj_io_in),
+		.analog_io(mprj_analog_io)
+	);
+
+endmodule
+
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+/* Integer-N clock divider */
+`default_nettype wire
+ 
+module clock_div #(
+    parameter SIZE = 3		// Number of bits for the divider value
+) (
+    in, out, N, resetb
+);
+    input in;			// input clock
+    input [SIZE-1:0] N;		// the number to be divided by
+    input resetb;		// asynchronous reset (sense negative)
+    output out;			// divided output clock
+ 
+    wire out_odd;		// output of odd divider
+    wire out_even;		// output of even divider
+    wire not_zero;		// signal to find divide by 0 case
+    wire enable_even;		// enable of even divider
+    wire enable_odd;		// enable of odd divider
+
+    reg [SIZE-1:0] syncN;	// N synchronized to output clock
+    reg [SIZE-1:0] syncNp;	// N synchronized to output clock
+ 
+    assign not_zero = | syncN[SIZE-1:1];
+ 
+    assign out = (out_odd & syncN[0] & not_zero) | (out_even & !syncN[0]);
+    assign enable_odd = syncN[0] & not_zero;
+    assign enable_even = !syncN[0];
+
+    // Divider value synchronization (double-synchronized to avoid metastability)
+    always @(posedge out or negedge resetb) begin
+	if (resetb == 1'b0) begin
+	    syncN <= `CLK_DIV;	// Default to divide-by-2 on system reset
+	    syncNp <= `CLK_DIV;	// Default to divide-by-2 on system reset
+	end else begin
+	    syncNp <= N;
+	    syncN <= syncNp;
+	end
+    end
+ 
+    // Even divider
+    even even_0(in, out_even, syncN, resetb, not_zero, enable_even);
+    // Odd divider
+    odd odd_0(in, out_odd, syncN, resetb, enable_odd);
+ 
+endmodule // clock_div
+ 
+/* Odd divider */
+
+module odd #(
+    parameter SIZE = 3
+) (
+    clk, out, N, resetb, enable
+);
+    input clk;			// slow clock
+    output out;			// fast output clock
+    input [SIZE-1:0] N;		// division factor
+    input resetb;		// synchronous reset
+    input enable;		// odd enable
+ 
+    reg [SIZE-1:0] counter;	// these 2 counters are used
+    reg [SIZE-1:0] counter2;	// to non-overlapping signals
+    reg out_counter;		// positive edge triggered counter
+    reg out_counter2;		// negative edge triggered counter
+    reg rst_pulse;		// pulse generated when vector N changes
+    reg [SIZE-1:0] old_N;	// gets set to old N when N is changed
+    wire not_zero;		// if !not_zero, we devide by 1
+ 
+    // xor to generate 50% duty, half-period waves of final output
+    assign out = out_counter2 ^ out_counter;
+
+    // positive edge counter/divider
+    always @(posedge clk or negedge resetb) begin
+	if (resetb == 1'b0) begin
+	    counter <= `CLK_DIV;
+	    out_counter <= 1;
+	end else if (rst_pulse) begin
+	    counter <= N;
+	    out_counter <= 1;
+	end else if (enable) begin
+	    if (counter == 1) begin
+		counter <= N;
+		out_counter <= ~out_counter;
+	    end else begin
+		counter <= counter - 1'b1;
+	    end
+	end
+    end
+ 
+    reg [SIZE-1:0] initial_begin;	// this is used to offset the negative edge counter
+    wire [SIZE:0] interm_3;		// from the positive edge counter in order to
+    assign interm_3 = {1'b0, N} + 2'b11;	// guarantee 50% duty cycle.
+
+    localparam [SIZE:0] interm_init = {1'b0,`CLK_DIV} + 2'b11;
+
+    // Counter driven by negative edge of clock.
+
+    always @(negedge clk or negedge resetb) begin
+	if (resetb == 1'b0) begin
+	    // reset the counter at system reset
+	    counter2 <= `CLK_DIV;
+	    initial_begin <= interm_init[SIZE:1];
+	    out_counter2 <= 1;
+	end else if (rst_pulse) begin
+	    // reset the counter at change of N.
+	    counter2 <= N;
+	    initial_begin <= interm_3[SIZE:1];
+	    out_counter2 <= 1;
+	end else if ((initial_begin <= 1) && enable) begin
+
+	    // Do normal logic after odd calibration.
+	    // This is the same as the even counter.
+	    if (counter2 == 1) begin
+		counter2 <= N;
+		out_counter2 <= ~out_counter2;
+	    end else begin
+		counter2 <= counter2 - 1'b1;
+	    end
+	end else if (enable) begin
+	    initial_begin <= initial_begin - 1'b1;
+	end
+    end
+ 
+    //
+    // reset pulse generator:
+    //               __    __    __    __    _
+    // clk:       __/  \__/  \__/  \__/  \__/
+    //            _ __________________________
+    // N:         _X__________________________
+    //               _____
+    // rst_pulse: __/     \___________________
+    //
+    // This block generates an internal reset for the odd divider in the
+    // form of a single pulse signal when the odd divider is enabled.
+
+    always @(posedge clk or negedge resetb) begin
+	if (resetb == 1'b0) begin
+	    rst_pulse <= 0;
+	end else if (enable) begin
+	    if (N != old_N) begin
+		// pulse when reset changes
+		rst_pulse <= 1;
+	    end else begin
+		rst_pulse <= 0;
+	    end
+	end
+    end
+ 
+    always @(posedge clk) begin
+	// always save the old N value to guarante reset from
+	// an even-to-odd transition.
+	old_N <= N;
+    end	
+ 
+endmodule // odd
+
+/* Even divider */
+
+module even #(
+    parameter SIZE = 3
+) (
+    clk, out, N, resetb, not_zero, enable
+);
+    input clk;		// fast input clock
+    output out;		// slower divided clock
+    input [SIZE-1:0] N;	// divide by factor 'N'
+    input resetb;	// asynchronous reset
+    input not_zero;	// if !not_zero divide by 1
+    input enable;	// enable the even divider
+ 
+    reg [SIZE-1:0] counter;
+    reg out_counter;
+    wire [SIZE-1:0] div_2;
+ 
+    // if N=0 just output the clock, otherwise, divide it.
+    assign out = (clk & !not_zero) | (out_counter & not_zero);
+    assign div_2 = {1'b0, N[SIZE-1:1]};
+ 
+    // simple flip-flop even divider
+    always @(posedge clk or negedge resetb) begin
+	if (resetb == 1'b0) begin
+	    counter <= 1;
+	    out_counter <= 1;
+
+	end else if (enable) begin
+	    // only use switching power if enabled
+	    if (counter == 1) begin
+		// divide after counter has reached bottom
+		// of interval 'N' which will be value '1'
+		counter <= div_2;
+		out_counter <= ~out_counter;
+	    end else begin
+		// decrement the counter and wait
+		counter <= counter-1;	// to start next transition.
+	    end
+	end
+    end
+ 
+endmodule //even
+`default_nettype wire
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+`default_nettype wire
+/* 
+ *---------------------------------------------------------------------
+ * A simple module that generates buffered high and low outputs
+ * in the 1.8V domain.
+ *---------------------------------------------------------------------
+ */
+
+//Ritesh Balaji s `include "/home/rbalajis/vsd_task/vsdRiscvScl180/rtl/dummy_scl180_conb_1.v"
+
+module constant_block (
+    `ifdef USE_POWER_PINS
+         inout vccd,
+         inout vssd,
+    `endif
+
+    output	 one,
+    output	 zero
+);
+
+    wire	one_unbuf;
+    wire	zero_unbuf;
+
+    dummy_scl180_conb_1 const_source (
+`ifndef USE_POWER_PINS
+            .VPWR(vccd),
+            .VGND(vssd),
+            .VPB(vccd),
+            .VNB(vssd),
+`endif
+            .HI(one_unbuf),
+            .LO(zero_unbuf)
+    );
+
+    /* Buffer the constant outputs (could be synthesized) */
+    /* NOTE:  Constant cell HI, LO outputs are connected to power	*/
+    /* rails through an approximately 120 ohm resistor, which is not	*/
+    /* enough to drive inputs in the I/O cells while ensuring ESD	*/
+    /* requirements, without buffering.					*/
+
+    buffda const_one_buf (
+`ifndef USE_POWER_PINS
+            .VPWR(vccd),
+            .VGND(vssd),
+            .VPB(vccd),
+            .VNB(vssd),
+`endif
+            .I(one_unbuf),
+            .Z(one)
+    );
+
+    buffda const_zero_buf (
+`ifndef USE_POWER_PINS
+            .VPWR(vccd),
+            .VGND(vssd),
+            .VPB(vccd),
+            .VNB(vssd),
+`endif
+            .I(zero_unbuf),
+            .Z(zero)
+    );
+
+endmodule
+`default_nettype wire
+module copyright_block_a ();
+endmodule
+module copyright_block ();
+endmodule
+`default_nettype wire
+// module that has registers used for debug
+module debug_regs (    
+    input wb_clk_i,
+    input wb_rst_i,
+    input wbs_stb_i,
+    input wbs_cyc_i,
+    input wbs_we_i,
+    input [3:0] wbs_sel_i,
+    input [31:0] wbs_dat_i,
+    input [31:0] wbs_adr_i,
+    output reg wbs_ack_o,
+    output reg [31:0] wbs_dat_o);
+
+    reg [31:0] debug_reg_1;
+    reg [31:0] debug_reg_2;
+
+    // write
+    always @(posedge wb_clk_i or posedge wb_rst_i) begin
+        if (wb_rst_i) begin
+            debug_reg_1 <=0;
+            debug_reg_2 <=0;
+            wbs_dat_o   <=0;
+            wbs_ack_o   <=0;
+        end else if (wbs_cyc_i && wbs_stb_i && wbs_we_i && !wbs_ack_o && (wbs_adr_i[3:0]==4'hC||wbs_adr_i[3:0]==4'h8))begin // write
+            // write to reg1
+            debug_reg_1[7:0]    <= ((wbs_adr_i[3:0]==4'h8) && wbs_sel_i[0])?  wbs_dat_i[7:0]   :debug_reg_1[7:0];
+            debug_reg_1[15:8]   <= ((wbs_adr_i[3:0]==4'h8) && wbs_sel_i[1])?  wbs_dat_i[15:8]  :debug_reg_1[15:8];
+            debug_reg_1[23:16]  <= ((wbs_adr_i[3:0]==4'h8) && wbs_sel_i[2])?  wbs_dat_i[23:16] :debug_reg_1[23:16];
+            debug_reg_1[31:24]  <= ((wbs_adr_i[3:0]==4'h8) && wbs_sel_i[3])?  wbs_dat_i[31:24] :debug_reg_1[31:24];
+            // write to reg2
+            debug_reg_2[7:0]    <= ((wbs_adr_i[3:0]==4'hC) && wbs_sel_i[0])?  wbs_dat_i[7:0]   :debug_reg_2[7:0];
+            debug_reg_2[15:8]   <= ((wbs_adr_i[3:0]==4'hC) && wbs_sel_i[1])?  wbs_dat_i[15:8]  :debug_reg_2[15:8];
+            debug_reg_2[23:16]  <= ((wbs_adr_i[3:0]==4'hC) && wbs_sel_i[2])?  wbs_dat_i[23:16] :debug_reg_2[23:16];
+            debug_reg_2[31:24]  <= ((wbs_adr_i[3:0]==4'hC) && wbs_sel_i[3])?  wbs_dat_i[31:24] :debug_reg_2[31:24];
+            wbs_ack_o <= 1;
+        end else if (wbs_cyc_i && wbs_stb_i && !wbs_we_i && !wbs_ack_o && (wbs_adr_i[3:0]==4'hC||wbs_adr_i[3:0]==4'h8)) begin // read 
+            wbs_dat_o <= ((wbs_adr_i[3:0]==4'hC)) ? debug_reg_2 : debug_reg_1; 
+            wbs_ack_o <= 1;
+        end else begin 
+            wbs_ack_o <= 0;
+            wbs_dat_o <= 0;
+        end
+    end
+endmodule
+`default_nettype wire
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+
+//`ifndef __GLOBAL_DEFINE_H
+// Global parameters
+//`define __GLOBAL_DEFINE_H
+
+`define MPRJ_IO_PADS_1 19	/* number of user GPIO pads on user1 side */
+`define MPRJ_IO_PADS_2 19	/* number of user GPIO pads on user2 side */
+`define MPRJ_IO_PADS (`MPRJ_IO_PADS_1 + `MPRJ_IO_PADS_2)
+
+`define MPRJ_PWR_PADS_1 2	/* vdda1, vccd1 enable/disable control */
+`define MPRJ_PWR_PADS_2 2	/* vdda2, vccd2 enable/disable control */
+`define MPRJ_PWR_PADS (`MPRJ_PWR_PADS_1 + `MPRJ_PWR_PADS_2)
+
+// Analog pads are only used by the "caravan" module and associated
+// modules such as user_analog_project_wrapper and chip_io_alt.
+
+`define ANALOG_PADS_1 5
+`define ANALOG_PADS_2 6
+
+`define ANALOG_PADS (`ANALOG_PADS_1 + `ANALOG_PADS_2)
+
+// Adding GPIO Pads for Caravel
+`define OPENFRAME_IO_PADS 44
+// Size of soc_mem_synth
+
+// Type and size of soc_mem
+// `define USE_OPENRAM
+`define USE_CUSTOM_DFFRAM
+// don't change the following without double checking addr widths
+`define MEM_WORDS 256
+
+// Number of columns in the custom memory; takes one of three values:
+// 1 column : 1 KB, 2 column: 2 KB, 4 column: 4KB
+`define DFFRAM_WSIZE 4
+`define DFFRAM_USE_LATCH 0
+
+// not really parameterized but just to easily keep track of the number
+// of ram_block across different modules
+`define RAM_BLOCKS 2
+
+// Clock divisor default value
+`define CLK_DIV 3'b010
+
+// GPIO control default mode and enable for most I/Os
+// Most I/Os set to be user bidirectional pins on power-up.
+`define MGMT_INIT 1'b0
+`define OENB_INIT 1'b0
+`define DM_INIT 3'b110
+
+
+`define LA_SIZE 'd128
+`define USER_SPACE_ADDR 32'h30000000 
+`define USER_SPACE_SIZE 'hFFFFC // sum with USER_SPACE_ADDR is the address of last address
+`define IO_CTRL_BITS 'd13 // size of gpio_control_reg
+`define POWER_DOMAINS 'd3 // size of gpio_control_reg
+
+//`endif // __GLOBAL_DEFINE_H
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+`default_nettype wire
+// (True) digital PLL
+//
+// Output goes to a trimmable ring oscillator (see documentation).
+// Ring oscillator should be trimmable to above and below maximum
+// ranges of the input.
+//
+// Input "osc" comes from a fixed clock source (e.g., crystal oscillator
+// output).
+//
+// Input "div" is the target number of clock cycles per oscillator cycle.
+// e.g., if div == 8 then this is an 8X PLL.
+//
+// Clock "clock" is the PLL output being trimmed.
+// (NOTE:  To be done:  Pass-through enable)
+//
+// Algorithm:
+//
+// 1) Trim is done by thermometer code.  Reset to the highest value
+//    in case the fastest rate clock is too fast for the logic.
+//
+// 2) Count the number of contiguous 1s and 0s in "osc"
+//    periods of the master clock.  If the count maxes out, it does
+//    not roll over.
+//
+// 3) Add the two counts together.
+//
+// 4) If the sum is less than div, then the clock is too slow, so
+//    decrease the trim code.  If the sum is greater than div, the
+//    clock is too fast, so increase the trim code.  If the sum
+//    is equal to div, the the trim code does not change.
+//
+
+module digital_pll_controller(reset, clock, osc, div, trim);
+    input reset;
+    input clock;
+    input osc;
+    input [4:0] div;
+    output [25:0] trim;		// Use ring_osc2x13, with 26 trim bits
+
+    wire [25:0] trim;
+    reg [2:0] oscbuf;
+    reg [2:0] prep;
+
+    reg [4:0] count0;
+    reg [4:0] count1;
+    reg [6:0] tval;	// Includes 2 bits fractional
+    wire [4:0] tint;	// Integer part of the above
+
+    wire [5:0] sum;
+
+    assign sum = count0 + count1;
+ 
+    // Integer to thermometer code (maybe there's an algorithmic way?)
+    assign tint = tval[6:2];
+                                     // |<--second-->|<-- first-->|
+    assign trim = (tint == 5'd0)  ? 26'b0000000000000_0000000000000 :
+          (tint == 5'd1)  ? 26'b0000000000000_0000000000001 :
+          (tint == 5'd2)  ? 26'b0000000000000_0000001000001 :
+          (tint == 5'd3)  ? 26'b0000000000000_0010001000001 :
+          (tint == 5'd4)  ? 26'b0000000000000_0010001001001 :
+          (tint == 5'd5)  ? 26'b0000000000000_0010101001001 :
+          (tint == 5'd6)  ? 26'b0000000000000_1010101001001 :
+          (tint == 5'd7)  ? 26'b0000000000000_1010101101001 :
+          (tint == 5'd8)  ? 26'b0000000000000_1010101101101 :
+          (tint == 5'd9)  ? 26'b0000000000000_1011101101101 :
+          (tint == 5'd10) ? 26'b0000000000000_1011101111101 :
+          (tint == 5'd11) ? 26'b0000000000000_1111101111101 :
+          (tint == 5'd12) ? 26'b0000000000000_1111101111111 :
+          (tint == 5'd13) ? 26'b0000000000000_1111111111111 :
+          (tint == 5'd14) ? 26'b0000000000001_1111111111111 :
+          (tint == 5'd15) ? 26'b0000001000001_1111111111111 :
+          (tint == 5'd16) ? 26'b0010001000001_1111111111111 :
+          (tint == 5'd17) ? 26'b0010001001001_1111111111111 :
+          (tint == 5'd18) ? 26'b0010101001001_1111111111111 :
+          (tint == 5'd19) ? 26'b1010101001001_1111111111111 :
+          (tint == 5'd20) ? 26'b1010101101001_1111111111111 :
+          (tint == 5'd21) ? 26'b1010101101101_1111111111111 :
+          (tint == 5'd22) ? 26'b1011101101101_1111111111111 :
+          (tint == 5'd23) ? 26'b1011101111101_1111111111111 :
+          (tint == 5'd24) ? 26'b1111101111101_1111111111111 :
+          (tint == 5'd25) ? 26'b1111101111111_1111111111111 :
+                    26'b1111111111111_1111111111111;
+   
+    always @(posedge clock or posedge reset) begin
+    if (reset == 1'b1) begin
+        tval <= 7'd0;	// Note:  trim[0] must be zero for startup to work.
+        oscbuf <= 3'd0;
+        prep <= 3'd0;
+        count0 <= 5'd0;
+        count1 <= 5'd0;
+
+    end else begin
+        oscbuf <= {oscbuf[1:0], osc};
+
+        if (oscbuf[2] != oscbuf[1]) begin
+        count1 <= count0;
+        count0 <= 5'b00001;
+        prep <= {prep[1:0], 1'b1};
+
+        if (prep == 3'b111) begin
+            if (sum > div) begin
+		if (tval < 127) begin
+            	    tval <= tval + 1;
+		end
+            end else if (sum < div) begin
+		if (tval > 0) begin
+            	    tval <= tval - 1;
+		end
+            end
+        end
+        end else begin
+        if (count0 != 5'b11111) begin
+                count0 <= count0 + 1;
+        end
+        end
+    end
+    end
+
+endmodule	// digital_pll_controller
+`default_nettype wire
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+`default_nettype none
+// Digital PLL (ring oscillator + controller)
+// Technically this is a frequency locked loop, not a phase locked loop.
+
+`ifndef SIM
+`include "digital_pll_controller.v"
+`include "ring_osc2x13.v"
+`endif
+
+module digital_pll(
+/*`ifdef USE_POWER_PINS
+    VPWR,
+    VGND,
+`endif */
+    resetb, enable, osc, clockp, div, dco, ext_trim);
+
+/*`ifdef USE_POWER_PINS
+    input VPWR;
+    input VGND;
+`endif */
+
+    input	 resetb;	// Sense negative reset
+    input	 enable;	// Enable PLL
+    input	 osc;		// Input oscillator to match
+    input [4:0]	 div;		// PLL feedback division ratio
+    input 	 dco;		// Run in DCO mode
+    input [25:0] ext_trim;	// External trim for DCO mode
+
+    output [1:0] clockp;	// Two 90 degree clock phases
+
+    wire [1:0]   clockp_buffer_in;	// Input wires to clockp buffers
+    wire [25:0]  itrim;		// Internally generated trim bits
+    wire [25:0]  otrim;		// Trim bits applied to the ring oscillator
+    wire	 creset;	// Controller reset
+    wire	 ireset;	// Internal reset (external reset OR disable)
+
+    assign ireset = ~resetb | ~enable;
+
+    // In DCO mode: Hold controller in reset and apply external trim value
+
+    assign itrim = (dco == 1'b0) ? otrim : ext_trim;
+    assign creset = (dco == 1'b0) ? ireset : 1'b1;
+
+    (* keep *)
+    ring_osc2x13 ringosc (
+        .reset(ireset),
+        .trim(itrim),
+        .clockp(clockp_buffer_in)
+    );
+
+    digital_pll_controller pll_control (
+        .reset(creset),
+        .clock(clockp_buffer_in[0]),
+        .osc(osc),
+        .div(div),
+        .trim(otrim)
+    );
+
+    (* keep *)
+    bufbdf clockp_buffer_0 (
+`ifndef USE_POWER_PINS
+        .VPWR(VPWR),
+        .VGND(VGND),
+        .VPB(VPWR),
+        .VNB(VGND),
+`endif
+        .I(clockp_buffer_in[0]),
+        .Z(clockp[0])
+    );
+
+    (* keep *)
+    bufbdf clockp_buffer_1 (
+`ifndef USE_POWER_PINS
+        .VPWR(VPWR),
+        .VGND(VGND),
+        .VPB(VPWR),
+        .VNB(VGND),
+`endif
+        .I(clockp_buffer_in[1]),
+        .Z(clockp[1])
+    );
+
+endmodule
+`default_nettype wire
+`include "dummy_schmittbuf.v"
+// SPDX-FileCopyrightText: 2025 Efabless Corporation/VSD
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
+
+`default_nettype wire
+`timescale 1 ns / 1 ps
+/// sta-blackbox
+module dummy_por(
+`ifdef USE_POWER_PINS
+    inout vdd3v3,
+    inout vdd1v8,
+    inout vss3v3,
+    inout vss1v8,
+`endif
+    output porb_h,
+    output porb_l,
+    output por_l
+);
+`ifdef SIM
+    wire mid;
+    reg inode;
+       // This is a behavioral model!  Actual circuit is a resitor dumping
+    // current (slowly) from vdd3v3 onto a capacitor, and this fed into
+    // two schmitt triggers for strong hysteresis/glitch tolerance.
+
+    initial begin
+	inode <= 1'b0; 
+    end 
+
+    // Emulate current source on capacitor as a 500ns delay either up or
+    // down.  Note that this is sped way up for verilog simulation;  the
+    // actual circuit is set to a 15ms delay.
+
+   `ifdef USE_POWER_PINS
+   	always @(posedge vdd3v3) begin
+		#500 inode <= 1'b1;
+	end
+   `else
+	initial begin
+		#500 inode<=1'b1;
+	end
+  
+    `endif      // Instantiate two shmitt trigger buffers in series
+       dummy__schmittbuf_1 hystbuf1 (
+`ifdef USE_POWER_PINS
+	.VPWR(vdd3v3),
+	.VGND(vss3v3),
+	.VPB(vdd3v3),
+	.VNB(vss3v3),
+`endif
+	.A(inode),	
+	.X(mid)
+	
+    );
+
+    dummy__schmittbuf_1 hystbuf2 (
+`ifdef USE_POWER_PINS
+	.VPWR(vdd3v3),
+	.VGND(vss3v3),
+	.VPB(vdd3v3),
+	.VNB(vss3v3),
+`endif
+	.A(mid),
+	.X(porb_h)
+    );
+
+// since SCL180 has level-shifters already available in I/O pads
+    assign porb_l = porb_h;
+    // since this is behavioral anyway, but this should be
+    // replaced by a proper inverter
+    assign por_l = ~porb_l;
+`endif
+endmodule
+`default_nettype wire
+//Later this will be replaced by scl based schmitt buffer 
+
+`timescale 1ns / 1ps
+//`default_nettype none
+
+primitive dummy__udp_pwrgood_pp$PG (
+    UDP_OUT,
+    UDP_IN ,
+    VPWR   ,
+    VGND
+);
+
+    output UDP_OUT;
+    input  UDP_IN ;
+    input  VPWR   ;
+    input  VGND   ;
+
+    table
+     // UDP_IN VPWR VGND : UDP_OUT
+          0     1    0   :    0     ;
+          1     1    0   :    1     ;
+          1     0    0   :    x     ;
+          1     1    1   :    x     ;
+          1     x    0   :    x     ;
+          1     1    x   :    x     ;
+    endtable
+endprimitive
+
+// Import user defined primitives.
+`ifdef FUNCTIONAL
+`celldefine
+module dummy__schmittbuf_1 (
+    X   ,
+    A   ,
+    VPWR,
+    VGND,
+    VPB ,
+    VNB
+);
+
+    // Module ports
+    output X   ;
+    input  A   ;
+    input  VPWR;
+    input  VGND;
+    input  VPB ;
+    input  VNB ;
+
+    // Local signals
+    wire buf0_out_X       ;
+    wire pwrgood_pp0_out_X;
+
+    //                                  Name         Output             Other arguments
+    buf                                 buf0        (buf0_out_X       , A                     );
+    dummy__udp_pwrgood_pp$PG pwrgood_pp0 (pwrgood_pp0_out_X, buf0_out_X, VPWR, VGND);
+    buf                                 buf1        (X                , pwrgood_pp0_out_X     );
+
+endmodule
+`endcelldefine
+ 
+`else
+
+
+
+
+
+/**
+ * schmittbuf: Schmitt Trigger Buffer.
+ *
+ * Verilog simulation timing model.
+ */
+
+
+// Import user defined primitives.
+
+`celldefine
+module dummy__schmittbuf_1 (
+    X   ,
+    A   ,
+    VPWR,
+    VGND,
+    VPB ,
+    VNB
+);
+
+    // Module ports
+    output X   ;
+    input  A   ;
+    input  VPWR;
+    input  VGND;
+    input  VPB ;
+    input  VNB ;
+
+    // Local signals
+    wire buf0_out_X       ;
+    wire pwrgood_pp0_out_X;
+
+    //                                  Name         Output             Other arguments
+    buf                                 buf0        (buf0_out_X       , A                     );
+    dummy__udp_pwrgood_pp$PG pwrgood_pp0 (pwrgood_pp0_out_X, buf0_out_X, VPWR, VGND);
+    buf                                 buf1        (X                , pwrgood_pp0_out_X     );
+
+specify
+(A +=> X ) = (0:0:0,0:0:0);  // delays are tris,tfall
+endspecify
+endmodule
+`endcelldefine
+`endif
+`default_nettype wire
+/**
+ * conb: Constant value, low, high outputs.
+ *
+ * Verilog simulation functional model.
+ */
+
+module dummy_scl180_conb_1 (
+	output wire HI,
+	output wire LO
+);
+	// Connect HI to logic '1'
+	assign HI = 1'b1;
+
+	// Connect LO to logic '0'
+	assign LO = 1'b0;
+endmodule

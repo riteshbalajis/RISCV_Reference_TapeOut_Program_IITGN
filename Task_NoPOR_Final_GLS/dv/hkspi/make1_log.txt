@@ -1,0 +1,3 @@
+iverilog -Ttyp -DFUNCTIONAL -DSIM -I ../  \
+ -I ../..//rtl -I ../..//rtl/scl180_wrapper -I "/home/Synopsys/pdk/SCL_PDK_3/SCLPDK_V3.0_KIT/scl180/iopad/cio250/6M1L/verilog/tsl18cio250/zero"  \
+hkspi_tb.v -o hkspi.vvp 

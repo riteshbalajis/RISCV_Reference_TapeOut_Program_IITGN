@@ -1,0 +1,28 @@
+Info: [VCS_SAVE_RESTORE_INFO] ASLR (Address Space Layout Randomization) is detected on the machine. To enable $save functionality, ASLR will be switched off and simv re-executed.
+Please use '-no_save' simv switch to avoid this.
+                         Chronologic VCS (TM)
+         Version U-2023.03_Full64 -- Sat Dec 13 14:32:49 2025
+
+                    Copyright (c) 1991 - 2023 Synopsys, Inc.
+   This software and the associated documentation are proprietary to Synopsys,
+ Inc. This software may only be used in accordance with the terms and conditions
+ of a written license agreement with Synopsys, Inc. All other use, reproduction,
+   or distribution of this software is strictly prohibited.  Licensed Products
+     communicate with Synopsys servers for the purpose of providing software
+    updates, detecting software piracy and verifying that customers are using
+    Licensed Products in conformity with the applicable License Key for such
+  Licensed Products. Synopsys will use information gathered in connection with
+    this process to deliver software updates and pursue software pirates and
+                                   infringers.
+
+ Inclusivity & Diversity - Visit SolvNetPlus to read the "Synopsys Statement on
+            Inclusivity and Diversity" (Refer to article 000036315 at
+                        https://solvnetplus.synopsys.com)
+
+[SCL] 12/13/2025 14:32:50 Checking status for feature VCS-BASE-COMPILE
+[SCL] 12/13/2025 14:32:50 PID:1093 Client:nanodc.iitgn.ac.in Server:27020@c2s.cdacb.in Checkout succeeded VCS-BASE-COMPILE 2023.03 from VCS-Base-Compile-Pkg
+The design hasn't changed and need not be recompiled. 
+If you really want to, delete file /home/rbalajis/vsd_task/vsdRiscvScl180/dv/hkspi/simv.daidir/.vcs.timestamp and
+run VCS again.
+
+[SCL] 12/13/2025 14:32:50 PID:1093 Client:nanodc.iitgn.ac.in checkin (null) 

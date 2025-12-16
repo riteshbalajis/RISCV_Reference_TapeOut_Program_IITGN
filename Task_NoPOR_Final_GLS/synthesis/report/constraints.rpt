@@ -1,0 +1,13 @@
+Warning: Design 'vsdcaravel' has '5' unresolved references. For more detailed information, use the "link" command. (UID-341)
+ 
+****************************************
+Report : constraint
+        -all_violators
+Design : vsdcaravel
+Version: T-2022.03-SP5
+Date   : Tue Dec 16 11:03:49 2025
+****************************************
+
+This design has no violated constraints.
+
+1
