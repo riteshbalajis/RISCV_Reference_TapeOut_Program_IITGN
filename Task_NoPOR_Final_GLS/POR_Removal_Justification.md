@@ -1,116 +1,190 @@
-#POR Removal Justification
+# POR Removal Justification
 
-### Signal Flow of dummy_por:
+# Why External Reset Is Sufficient in SCL-180 (No POR)
 
-    +-----------------+
-    |    vdd3v3      |
-    +-----------------+
-            |
-            v
-    +-----------------+
-    |   dummy_por    |
-    | porb_h,porb_l, |
-    |     por_l      |
-    +-----------------+
-            |
-            v
-    +-----------------+
-    | caravel_core.v |
-    | porb_h,porb_l, |
-    |     por_l      |
-    +-----------------+
-        |          |
-        v          v
-    +-----------+ +-----------------+
-    |caravel_   | |  housekeeping   |
-    |clocking   | |   (porb_l→porb) |
-    |porb_l→porb| +-----------------+
-    +-----------+         |
-                        v
-                +-----------------+
-                |housekeeping_spit|
-                | porb + Internal |
-                |   Logic         | 
-                +-----------------+
+## 1. Why POR Is Fundamentally an Analog Problem
 
-### Signal flow of resetb from TestBench:
+### 1.1 Nature of Power-On Behavior
 
-    +-----------------+
-    |      tb        |
-    |    resetb      |
-    +-----------------+
-            |
-            v
-    +-----------------+
-    |  vsdcaravel    |
-    |    resetb      |
-    +-----------------+
-            |
-            v
-    +-----------------+
-    |   chip_io      |
-    |    resetb      |
-    +-----------------+
-            |
-            v
-    +-----------------+
-    |   pc3de PAD    |
-    |    resetb      |
-    +-----------------+
-            |
-            v (PAD delay)
-    +-----------------+
-    |   chip_io      |
-    | resetb_core_h  |
-    +-----------------+
-            |
-            v
-    +-----------------+
-    |  caravel.v     |
-    |    rstb_h      |
-    +-----------------+
-            |
-            v
-    +-----------------+
-    |caravel_core.v  |
-    |    rstb_h      |
-    +-----------------+
-            |
-            v
-    +-----------------+
-    |  xres_bef      |
-    |    rstb_l      |
-    +-----------------+
-            |
-            v
-        (continues...)
+Power-on behavior is inherently analog:
 
-### Removal of dummy_por :
+* Supply rails ramp continuously, not instantaneously
+* Threshold voltages are crossed gradually
+* Different domains reach valid operating regions at different times
 
-The three signals porb_h,porb_l,por_l come from dummy_por to  caravel_core.v. From that it goes to the other modules as porh_l signal no other propogates from this module out of the three signal.
+Digital logic cannot reliably reason about these conditions.
 
--  Deletion of Dummy_por module
+---
 
-![](img/1_dport.png)
+### 1.2  POR Functionlaity
+
+A real POR circuit:
+
+* Uses analog components (bandgap, RC, comparators)
+* Detects when VDD crosses a safe threshold
+* Holds reset asserted until voltage and bias are valid
+
+This functionality cannot be faithfully replicated in RT*.
+
+---
+
+## 2. Why RTL-Based POR Is Unsafe
+
+### 2.1 RTL POR Assumptions
+
+An RTL-based POR assumes:
+
+* Clock is running
+* Flops power up in a known state evertime it will be in stable state
+* Reset signal is already valid
+
+All three assumptions are invalid during power-up.
+
+---
+
+### 2.2 Failure Modes of RTL POR
+
+RTL POR logic may:
+
+* Release reset early due to meta stability
+* Miss reset assertion if clocks are unstable
+* Power up flops in random states
+
+As a result:
+
+> RTL POR can create a false sense of safety while introducing silent failure modes.
+
+* POR is either analog
+* Or provided externally
 
 
-- After deletion In cravel_core.v the three signals is assigned as output but there is no source for that signal so we need to give the external reset from the testbench.
+---
 
-![](img/40.png)
-- the signal from testbench given to vsdcaravel.v so we need to propogate the external signal to the caravel_core.v through the vsdcaravel.The vsdcaravel has alread a instantiation to caravel_core as it get the porb_h and por_l from vsdcaravel.The porh_l is used in caravel_core so i remove the other two signal and only porh_l is modified as inout port and named as reset_n for reference .
+## 3. Why SCL-180 Pads Allow Safe External Reset
 
-- now caravel_core signal is reduced so we need to change the signals initialization in all of instatiated module 
+### 3.1 Dedicated Reset Pad Architecture
 
-![](img/5.png)
+In SCL-180:
 
- - from this it is clear that caravel.v and vsdcaravel.v so we need to modify instantiation
-![](img/17.png)
+* Reset pin is a dedicated pad, not a GPIO as sky-130
+* It does not depend on configuration registers
+* It is not gated by pad-enable logic
 
-- then in vsdcaravel assigning the signals to resetb from testbench 
+The reset signal is available as soon as VDD is present.
 
-![](img/41.png)
+---
 
-- assigning the reset_n of caravel_core to resetb of testbench this is actual connection between the testbench and caravel_core. From there it goes to every module which replace the signal of the dummy_por.
+### 3.2 Asynchronous Reset Path
 
-![](img/15.png)
+Reset is used asynchronously throughout the design:
+
+```verilog
+always @(posedge clk or negedge resetb) begin
+    if (!resetb) state <= RESET;
+end
+```
+
+This ensures:
+
+* Reset assertion is independent of clock stability
+* Logic can be safely held in reset during clock ramp-up
+
+---
+
+### 3.3 Level Shifting and Domain Safety
+
+The reset pad feeds a level-shifting buffer (`xres_buf`), ensuring:
+
+* Safe crossing from I/O domain to core domain
+* No dependence on internal digital state
+
+This provides a clean, deterministic reset path.
+
+---
+
+## 4. Risks Considerations:
+
+### 4.1 Risk: External Reset Not Asserted
+
+**Risk:** Board or testbench forgets to assert reset.
+
+* Reset is a required system-level signal
+* External reset generators are standard (PMIC, supervisor, tester)
+
+---
+
+### 4.2 Risk: Reset Deasserted Too Early
+
+**Risk:** Reset released before clocks or PLL are stable.
+
+* Reset deassertion controlled externally
+* Clock/reset synchronization stages exist in RTL
+* Reset remains asynchronous
+
+---
+
+### 4.3 Risk: No Internal POR Backup
+
+**Risk:** No fallback if external reset fails.
+
+
+* External reset is more reliable than RTL POR
+* Eliminates false confidence from unsafe digital POR
+
+---
+
+## 5. Comparison with SKY130 (Why POR Was Mandatory There)
+
+### 5.1 SKY130 Reset Architecture
+
+In SKY130:
+
+* Reset pin implemented using GPIO cells
+* GPIO cells require configuration after power-up
+* Reset pin not guaranteed valid at VDD ramp
+
+---
+
+### 5.2 Consequence in SKY130
+
+Without POR:
+
+* Reset pin could float
+* Core logic could start unpredictably
+
+Therefore:
+
+> **A mandatory analog POR was required in SKY130 designs.**
+
+---
+
+### 5.3 Architectural Contrast
+
+| Aspect             | SKY130     | SCL-180               |
+| ------------------ | ---------- | --------------------- |
+| Reset pad type     | GPIO-based | Dedicated reset pad   |
+| Safe at power-up   | No         | Yes                   |
+| Requires POR       | Yes        | No                    |
+| Reset availability | After POR  | Immediately after VDD |
+
+---
+
+## Summary
+
+
+
+
+* POR is an analog problem
+* RTL-based POR is unsafe
+* SCL-180 reset pads are valid immediately after VDD
+* External reset is deterministic and industry-standard
+* SKY130 constraints do not apply to SCL-180
+
+
+
+In SCL-180, enforcing a digital POR is neither necessary nor safer. The architecture provides a dedicated, asynchronous, power-valid reset pad that enables deterministic startup behavior using an external reset source. Removing POR reduces risk rather than increasing it.
+
+---
+
+
 
