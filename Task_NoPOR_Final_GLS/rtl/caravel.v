@@ -309,8 +309,8 @@ module caravel (
 `endif
 
       // SoC Core Interface
-      .porb_h(porb_h),
-      .por_l(por_l),
+    
+      .reset_n(por_l),
       .rstb_h(rstb_h),
       .clock_core(clock_core),
       .gpio_out_core(gpio_out_core),
