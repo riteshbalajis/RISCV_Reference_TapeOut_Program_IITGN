@@ -25,7 +25,7 @@ The floorplan establishes a 200 µm margin around the die perimeter to accommoda
 - **Die Boundary:** `{0 0 3588 5188}` (µm)
 - **Core Boundary:** `{200 200 3388 4988}` (µm)
 
-![Die and Core Boundary](images/floorplan_screenshot1.png)
+![Die and Core Boundary](img/32.png)
 
 ---
 
@@ -91,7 +91,7 @@ Saves the floorplan state to the NDM library.
 
 ## Results
 
-### Floorplan View
+### Running Floorplan 
 
 ![Floorplan](img/30.png)
 
