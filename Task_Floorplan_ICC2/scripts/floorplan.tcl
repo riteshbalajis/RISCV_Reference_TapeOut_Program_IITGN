@@ -1,112 +1,95 @@
-############################################################
-# Task 5 – SoC Floorplanning Using ICC2 (Floorplan + Save)
-# Author  : Divya Darshan VR (VSD)
-# Design  : vsdcaravel
-# Tool    : Synopsys ICC2 2022.12
-############################################################
+source -echo ./icc2_common_setup.tcl
+source -echo ./icc2_dp_setup.tcl
 
-# ---------------------------------------------------------
-# Basic Setup
-# ---------------------------------------------------------
-set DESIGN_NAME      vsdcaravel
-set DESIGN_LIBRARY   vsdcaravel_fp_lib
+# =========================================================
+# Clean existing NDM library (MUST be before create_lib)
+# =========================================================
+catch {close_lib -all}
 
-# ---------------------------------------------------------
-# Reference Library (NDM with technology)
-# ---------------------------------------------------------
-set REF_LIB \
-"/home/rbalajis/work/run1/icc2_workshop_collaterals/standaloneFlow/work/raven_wrapperNangate/lib.ndm"
-
-# ---------------------------------------------------------
-# Clean old library (fresh start)
-# ---------------------------------------------------------
-if {[file exists $DESIGN_LIBRARY]} {
-    file delete -force $DESIGN_LIBRARY
+if {[file exists ${WORK_DIR}/${DESIGN_LIBRARY}]} {
+    puts "RM-info : Removing old library ${WORK_DIR}/${DESIGN_LIBRARY}"
+    file delete -force ${WORK_DIR}/${DESIGN_LIBRARY}
 }
 
-# ---------------------------------------------------------
-# Create ICC2 Design Library
-# ---------------------------------------------------------
-create_lib $DESIGN_LIBRARY -ref_libs $REF_LIB
 
-# ---------------------------------------------------------
-# Read synthesized netlist
-# (Unresolved references are OK at floorplan stage)
-# ---------------------------------------------------------
-read_verilog -top $DESIGN_NAME /home/rbalajis/vsd_task/vsdRiscvScl180/synthesis/output/vsdcaravel_synthesis.v
+###---NDM Library creation---###
+set create_lib_cmd "create_lib ${WORK_DIR}/$DESIGN_LIBRARY"
+if {[file exists [which $TECH_FILE]]} {
+   lappend create_lib_cmd -tech $TECH_FILE ;# recommended
+} elseif {$TECH_LIB != ""} {
+   lappend create_lib_cmd -use_technology_lib $TECH_LIB ;# optional
+}
+lappend create_lib_cmd -ref_libs $REFERENCE_LIBRARY
+puts "RM-info : $create_lib_cmd"
+eval ${create_lib_cmd}
 
-# Set current design explicitly
-current_design $DESIGN_NAME
+###---Read Synthesized Verilog---###
+if {$DP_FLOW == "hier" && $BOTTOM_BLOCK_VIEW == "abstract"} {
+   # Read in the DESIGN_NAME outline.  This will create the outline
+   puts "RM-info : Reading verilog outline (${VERILOG_NETLIST_FILES})"
+   read_verilog_outline -design ${DESIGN_NAME}/${INIT_DP_LABEL_NAME} -top ${DESIGN_NAME} ${VERILOG_NETLIST_FILES}
+   } else {
+   # Read in the full DESIGN_NAME.  This will create the DESIGN_NAME view in the database
+   puts "RM-info : Reading full chip verilog (${VERILOG_NETLIST_FILES})"
+   read_verilog -design ${DESIGN_NAME}/${INIT_DP_LABEL_NAME} -top ${DESIGN_NAME} ${VERILOG_NETLIST_FILES}
+}
 
-# ---------------------------------------------------------
-# Floorplan Definition (MANDATORY)
-# Die Size   : 3588 × 5188 microns
-# Core Margin: 200 microns on all sides
-# ---------------------------------------------------------
+## Technology setup for routing layer direction, offset, site default, and site symmetry.
+#  If TECH_FILE is specified, they should be properly set.
+#  If TECH_LIB is used and it does not contain such information, then they should be set here as well.
+if {$TECH_FILE != "" || ($TECH_LIB != "" && !$TECH_LIB_INCLUDES_TECH_SETUP_INFO)} {
+   if {[file exists [which $TCL_TECH_SETUP_FILE]]} {
+      puts "RM-info : Sourcing [which $TCL_TECH_SETUP_FILE]"
+      source -echo $TCL_TECH_SETUP_FILE
+   } elseif {$TCL_TECH_SETUP_FILE != ""} {
+      puts "RM-error : TCL_TECH_SETUP_FILE($TCL_TECH_SETUP_FILE) is invalid. Please correct it."
+   }
+}
+
+# Specify a Tcl script to read in your TLU+ files by using the read_parasitic_tech command
+if {[file exists [which $TCL_PARASITIC_SETUP_FILE]]} {
+   puts "RM-info : Sourcing [which $TCL_PARASITIC_SETUP_FILE]"
+   source -echo $TCL_PARASITIC_SETUP_FILE
+} elseif {$TCL_PARASITIC_SETUP_FILE != ""} {
+   puts "RM-error : TCL_PARASITIC_SETUP_FILE($TCL_PARASITIC_SETUP_FILE) is invalid. Please correct it."
+} else {
+   puts "RM-info : No TLU plus files sourced, Parastic library containing TLU+ must be included in library reference list"
+}
+
+###---Routing settings---###
+## Set max routing layer
+if {$MAX_ROUTING_LAYER != ""} {set_ignored_layers -max_routing_layer $MAX_ROUTING_LAYER}
+## Set min routing layer
+if {$MIN_ROUTING_LAYER != ""} {set_ignored_layers -min_routing_layer $MIN_ROUTING_LAYER}
+
+####################################
+# Check Design: Pre-Floorplanning
+####################################
+if {$CHECK_DESIGN} {
+   redirect -file ${REPORTS_DIR_INIT_DP}/check_design.pre_floorplan     {check_design -ems_database check_design.pre_floorplan.ems -checks dp_pre_floorplan}
+}
+
+
+####################################
+# Floorplanning
+####################################
+#initialize_floorplan -core_utilization 0.05
 initialize_floorplan \
   -control_type die \
   -boundary {{0 0} {3588 5188}} \
   -core_offset {200 200 200 200}
 
-# ---------------------------------------------------------
-# IO Regions using placement blockages
-# (Conceptual IO planning only)
-# ---------------------------------------------------------
+save_lib -all
 
-# Bottom
-create_placement_blockage \
-  -name IO_BOTTOM \
-  -type hard \
-  -boundary {{0 0} {3588 100}}
+##Pin Placement
 
-# Top
-create_placement_blockage \
-  -name IO_TOP \
-  -type hard \
-  -boundary {{0 5088} {3588 5188}}
+get_ports
 
-# Left
-create_placement_blockage \
-  -name IO_LEFT \
-  -type hard \
-  -boundary {{0 100} {100 5088}}
+place_pins -self
 
-# Right
-create_placement_blockage \
-  -name IO_RIGHT \
-  -type hard \
-  -boundary {{3488 100} {3588 5088}}
+### Report 
 
-# ---------------------------------------------------------
-# SAVE FLOORPLAN (CRITICAL FOR TASK-6)
-# ---------------------------------------------------------
-
-# Save block snapshot
-save_block -force -label floorplan
+redirect -file ${REPORTS_DIR_INIT_DP}/report_design_pins.rpt {report_design}
+redirect -file ${REPORTS_DIR_INIT_DP}/report_floorplan.rpt {report_floorplan}
 
 
-# Save library
-save_lib
-
-# ---------------------------------------------------------
-# WRITE FLOORPLAN DEF (NO ROUTING, NO PLACEMENT)
-# ---------------------------------------------------------
-file mkdir ../outputs
-
-write_def ../outputs/vsdcaravel_floorplan.def
-
-# ---------------------------------------------------------
-# BASIC REPORT
-# ---------------------------------------------------------
-file mkdir ../reports
-
-redirect -file ../reports/floorplan_report.txt {
-    puts "===== FLOORPLAN GEOMETRY (USER DEFINED) ====="
-    puts "Die Area  : 0 0 3588 5188  (microns)"
-    puts "Core Area : 200 200 3388 4988  (microns)"
-
-    puts "\n===== TOP LEVEL PORTS ====="
-    get_ports
-}
-
-puts "INFO: Floorplan created, saved, and DEF written successfully."
