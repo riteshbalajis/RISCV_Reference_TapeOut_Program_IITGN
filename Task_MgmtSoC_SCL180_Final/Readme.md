@@ -122,22 +122,28 @@ The porb_l,porb_h,por_l are correctly following the resetb that is the signal gi
 
 ## GPIO Test:
 
+This test is intended to confirm correct GPIO direction control and output behavior. The simulation did not show the expected GPIO transitions, resulting in a test failure
+
 ### Result:
 
 ![](img/2.png)
 
 ## IRQ Test:
 
+This test exercises the interrupt signaling path from generation to observation at the management level. The test failed because interrupt events were not detected during RTL execution.
+
 ### Result :
 ![](9.png)
 
 ## SysCtrl Test:
 
+This test targets system control mechanisms such as reset distribution and control signal coordination. The expected system responses were not observed, leading to a failed test outcome.
 ### Result:
 
 ![](img/10.png)
 
 ## Storage Test:
+This test evaluates internal storage access and data handling logic under RTL simulation. The test did not complete successfully due to incorrect or missing storage behavior.
 
 ### Result:
 
@@ -145,12 +151,24 @@ The porb_l,porb_h,por_l are correctly following the resetb that is the signal gi
 
 ## mprj_ctrl Test:
 
+This test verifies control interactions between the management core and the user project. The control interface did not respond as expected, causing the test to fail.
+
 ### Result:
 
 ![](img/12.png)
 
 
 
+## Summary
+
+| Test Name   | Result |
+|------------|--------|
+| HKSPI      | Passed |
+| GPIO       | Failed |
+| IRQ        | Failed |
+| SysCtrl    | Failed |
+| Storage    | Failed |
+| mprj_ctrl  | Failed |
 
 
 
