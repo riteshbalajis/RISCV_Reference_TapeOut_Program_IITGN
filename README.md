@@ -138,7 +138,7 @@ This dual-level validation is critical for design confidence in production chips
 
 ### Part 2: Clocking Validation - PLL and Ring Oscillator Design
 
-The project includes sophisticated clock generation and distribution infrastructure designed entirely from scratch, demonstrating advanced analog-digital circuit integration expertise. The clocking system comprises two tightly-integrated components: a digital PLL controller and a silicon-realistic ring oscillator.
+This  includes sophisticated clock generation and distribution infrastructure designed entirely from scratch, demonstrating advanced analog-digital circuit integration expertise. The clocking system comprises two tightly-integrated components: a digital PLL controller and a silicon-realistic ring oscillator.
 
 #### Digital PLL Controller Architecture and Operation
 
@@ -378,7 +378,7 @@ Test success proves:
 
 ### Part 3: External Reset Integration and POR Removal
 
-The project demonstrates modern semiconductor architecture through strategic removal of the internal Power-On Reset (POR) module and implementation of direct external testbench-controlled reset. This architectural optimization is fully justified through detailed technology-specific analysis.
+This  demonstrates modern semiconductor architecture through strategic removal of the internal Power-On Reset (POR) module and implementation of direct external testbench-controlled reset. This architectural optimization is fully justified through detailed technology-specific analysis.
 
 #### POR Module Removal Justification
 
@@ -618,7 +618,7 @@ The same reset test executes on the synthesized gate-level netlist:
 
 ### Part 4: Signal Connectivity Resolution
 
-The project includes systematic identification, analysis, and resolution of a critical signal connectivity issue that blocked all test execution until resolved. This section demonstrates advanced debugging methodology through hierarchical signal analysis and waveform-based root cause identification.
+This  includes systematic identification, analysis, and resolution of a critical signal connectivity issue that blocked all test execution until resolved. This section demonstrates advanced debugging methodology through hierarchical signal analysis and waveform-based root cause identification.
 
 #### Problem Identification and Initial Discovery
 
@@ -687,7 +687,7 @@ Single Root Cause: Undefined porb_l signal
 
 #### Hierarchical Root Cause Analysis
 
-According to the problem statement in the project documentation, systematic analysis traced the signal through the design hierarchy to identify the root cause.
+According to the problem statement in This  documentation, systematic analysis traced the signal through the design hierarchy to identify the root cause.
 
 **Level 1: POR Module Source (dummy_por)**
 
@@ -810,7 +810,7 @@ Step 7: Verify Impact
 
 #### Solution Design and Implementation
 
-According to the solution documentation in the project files, the fix involved adding a wire declaration and assignment to caravel_core.v.
+According to the solution documentation in This  files, the fix involved adding a wire declaration and assignment to caravel_core.v.
 
 **Solution Strategy:**
 
@@ -1001,7 +1001,7 @@ This extensive project represents a comprehensive engineering effort demonstrati
 
 **Professional Implications:**
 
-The project demonstrates expertise appropriate for:
+This  demonstrates expertise appropriate for:
 
 - Senior-level design engineering roles at semiconductor companies
 - Advanced academic research in VLSI and semiconductor design
